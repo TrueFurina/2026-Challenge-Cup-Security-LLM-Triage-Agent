@@ -1,4 +1,6 @@
-# Security Agent — AI Security Incident Triage & False-Positive Elimination
+# 2026 Challenge Cup - Security LLM Triage Agent
+
+Multi-Agent Security Alert False Positive Elimination System
 
 > **中文版说明**: [README.zh.md](README.zh.md)
 

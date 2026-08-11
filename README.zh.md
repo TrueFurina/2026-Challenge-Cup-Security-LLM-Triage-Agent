@@ -1,8 +1,10 @@
-# Security Agent —— AI 安全事件研判与误报剔除智能体
+# 2026挑战杯 · 基于大模型的安全事件研判多智能体
+
+独立AI安全研判解决方案
 
 > **English version**: [README.md](README.md)
 
-以 **LLM 为决策核心**的安全事件研判与误报剔除智能体，2026 挑战杯参赛作品（赛题 XH-202614 / XH-202609）。融合确定性预筛、置信度门控 + 人工复核（HITL）、多 Agent 协作、RAG 知识接地、误报记忆与全链路审计账本。
+以 **LLM 为决策核心**的安全事件研判与误报剔除智能体，2026 挑战杯独立 AI 安全项目（赛题 XH-202614 / XH-202609）。融合确定性预筛、置信度门控 + 人工复核（HITL）、多 Agent 协作、RAG 知识接地、误报记忆与全链路审计账本。
 
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
