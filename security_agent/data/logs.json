@@ -1,0 +1,86 @@
+[
+  {
+    "host": "DC-01",
+    "user": "admin",
+    "message": "PowerShell 引擎启动，远程调用 Invoke-Expression",
+    "timestamp": "2025-03-10 10:00"
+  },
+  {
+    "host": "DC-01",
+    "user": "admin",
+    "message": "WinRM 会话建立，源 IP 192.168.1.100",
+    "timestamp": "2025-03-10 09:59"
+  },
+  {
+    "host": "DC-01",
+    "user": "system",
+    "message": "安全日志清除操作已记录",
+    "timestamp": "2025-03-10 08:00"
+  },
+  {
+    "host": "PRINT-02",
+    "user": "operator",
+    "message": "打印机扫描任务启动，来源 PRINTER-SCANNER",
+    "timestamp": "2025-03-10 11:00"
+  },
+  {
+    "host": "PRINT-02",
+    "user": "operator",
+    "message": "扫描完成，未发现异常",
+    "timestamp": "2025-03-10 11:05"
+  },
+  {
+    "host": "OA-SRV-01",
+    "user": "svc_web",
+    "message": "出站连接 203.0.113.5:443 已建立",
+    "timestamp": "2025-03-10 12:00"
+  },
+  {
+    "host": "OA-SRV-01",
+    "user": "svc_web",
+    "message": "进程 nginx.exe 异常外联行为",
+    "timestamp": "2025-03-10 12:00"
+  },
+  {
+    "host": "DEV-01",
+    "user": "dev_zhang",
+    "message": "远程共享 admin$ 访问尝试",
+    "timestamp": "2025-03-10 13:00"
+  },
+  {
+    "host": "FIN-SRV-01",
+    "user": "li_wang",
+    "message": "SSH 登录失败，来源 10.10.20.30",
+    "timestamp": "2025-03-10 14:00"
+  },
+  {
+    "host": "WEB-01",
+    "user": "www-data",
+    "message": "可疑 URL /uploads/shell.jsp 访问",
+    "timestamp": "2025-03-10 15:00"
+  },
+  {
+    "host": "FILE-01",
+    "user": "backup_svc",
+    "message": "大量文件重命名操作 .encrypted",
+    "timestamp": "2025-03-10 16:00"
+  },
+  {
+    "host": "WORKSTN-08",
+    "user": "zhou_li",
+    "message": "rundll32.exe 加载凭证枚举 DLL",
+    "timestamp": "2025-03-10 17:00"
+  },
+  {
+    "host": "BASTION-01",
+    "user": "auditor",
+    "message": "SSH 跳转到 10.10.100.10",
+    "timestamp": "2025-03-10 18:00"
+  },
+  {
+    "host": "MAIL-GW-01",
+    "user": "mail_daemon",
+    "message": "拦截恶意附件 invoice.docm",
+    "timestamp": "2025-03-10 19:00"
+  }
+]

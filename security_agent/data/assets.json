@@ -1,0 +1,109 @@
+[
+  {
+    "host": "DC-01",
+    "owner": "infra_team",
+    "department": "IT基础设施",
+    "criticality": "high",
+    "baseline_processes": [
+      "lsass.exe",
+      "winlogon.exe",
+      "ntdsai.dll"
+    ],
+    "maintenance_window": "周日 02:00-06:00"
+  },
+  {
+    "host": "PRINT-02",
+    "owner": "office_admin",
+    "department": "行政部",
+    "criticality": "low",
+    "baseline_processes": [
+      "spoolsv.exe",
+      "scanner.exe"
+    ],
+    "maintenance_window": "每月第一个周六"
+  },
+  {
+    "host": "OA-SRV-01",
+    "owner": "it_service",
+    "department": "IT服务",
+    "criticality": "middle",
+    "baseline_processes": [
+      "nginx.exe",
+      "php-cgi.exe",
+      "mysql.exe"
+    ]
+  },
+  {
+    "host": "DEV-01",
+    "owner": "dev_zhang",
+    "department": "研发部",
+    "criticality": "middle",
+    "baseline_processes": [
+      "devenv.exe",
+      "git.exe",
+      "sqlservr.exe"
+    ]
+  },
+  {
+    "host": "FIN-SRV-01",
+    "owner": "finance_li",
+    "department": "财务部",
+    "criticality": "high",
+    "baseline_processes": [
+      "sshd.exe",
+      "payment.exe"
+    ]
+  },
+  {
+    "host": "WEB-01",
+    "owner": "web_team",
+    "department": "IT服务",
+    "criticality": "high",
+    "baseline_processes": [
+      "httpd.exe",
+      "php-cgi.exe",
+      "mysqld.exe"
+    ]
+  },
+  {
+    "host": "FILE-01",
+    "owner": "storage_admin",
+    "department": "IT基础设施",
+    "criticality": "high",
+    "baseline_processes": [
+      "smb.exe",
+      "backup.exe"
+    ]
+  },
+  {
+    "host": "WORKSTN-08",
+    "owner": "zhou_li",
+    "department": "研发部",
+    "criticality": "low",
+    "baseline_processes": [
+      "explorer.exe",
+      "chrome.exe",
+      "outlook.exe"
+    ]
+  },
+  {
+    "host": "BASTION-01",
+    "owner": "sec_ops",
+    "department": "安全运维",
+    "criticality": "high",
+    "baseline_processes": [
+      "ssh.exe",
+      "auditd.exe"
+    ]
+  },
+  {
+    "host": "MAIL-GW-01",
+    "owner": "mail_admin",
+    "department": "IT服务",
+    "criticality": "middle",
+    "baseline_processes": [
+      "mail_scan.exe",
+      "smtp_svc.exe"
+    ]
+  }
+]

@@ -1,0 +1,170 @@
+[
+  {
+    "title": "PowerShell 远程执行检测规则",
+    "content": "检测非预期 PowerShell 远程执行，特别是从非管理跳板发起的 WinRM 调用。关联资产 baselines 和变更窗口可辅助误报判断。",
+    "tags": ["powershell", "lateral", "winrm", "detection"],
+    "category": "attack",
+    "attck_ids": ["T1059.001", "T1021.006"],
+    "cve_ids": []
+  },
+  {
+    "title": "打印机扫描误报处理流程",
+    "content": "内部扫描工具 PRINTER-SCANNER 每日对打印机执行端口扫描，PRINT-02 已标记为白名单资产，相关告警可直接标记为误报。",
+    "tags": ["whitelist", "scanner", "maintenance"],
+    "category": "whitelist",
+    "attck_ids": [],
+    "cve_ids": []
+  },
+  {
+    "title": "OA 服务器外联响应预案",
+    "content": "OA-SRV-01 出站连接到未知外部 IP 时需优先排查情报库，涉及 C2 节点则立即隔离。",
+    "tags": ["oa", "outbound", "c2", "response"],
+    "category": "response",
+    "attck_ids": ["T1071", "T1568"],
+    "cve_ids": []
+  },
+  {
+    "title": "远程管理共享访问规则",
+    "content": "开发服务器 DEV-01 上的远程共享访问需核对是否在预期维护窗口，误报常见于自动化部署工具。",
+    "tags": ["admin_share", "lateral", "maintenance"],
+    "category": "maintenance",
+    "attck_ids": ["T1021.002"],
+    "cve_ids": []
+  },
+  {
+    "title": "异常登录检测规则",
+    "content": "财务系统 FIN-SRV-01 异常登录需核对源 IP 是否为内部地址。",
+    "tags": ["login", "brute_force", "detection"],
+    "category": "attack",
+    "attck_ids": ["T1078", "T1110"],
+    "cve_ids": []
+  },
+  {
+    "title": "Webshell 检测规则",
+    "content": "Web 服务器出现 shell.jsp / cmd.aspx 等文件上传请求，高度疑似 webshell 攻击，建议立即隔离。",
+    "tags": ["webshell", "http", "exploit", "response"],
+    "category": "attack",
+    "attck_ids": ["T1505.003", "T1190"],
+    "cve_ids": ["CVE-2021-41773", "CVE-2017-12615"]
+  },
+  {
+    "title": "勒索软件加密检测规则",
+    "content": "文件批量重命名 .encrypted / .locked 后缀、大量 WriteData 操作、minidump 行为，结合进程 lineage 判断。",
+    "tags": ["ransomware", "encryption", "minidump", "critical"],
+    "category": "attack",
+    "attck_ids": ["T1486", "T1490"],
+    "cve_ids": []
+  },
+  {
+    "title": "凭证盗窃检测规则",
+    "content": "rundll32.exe 加载非标准 DLL 执行凭证枚举调用，结合源进程和用户 lineage 综合判断。",
+    "tags": ["credential", "theft", "lsass", "detection"],
+    "category": "attack",
+    "attck_ids": ["T1003.001", "T1003.002"],
+    "cve_ids": []
+  },
+  {
+    "title": "堡垒机运维基线",
+    "content": "运维人员通过 BASTION-01 跳转到核心资产属于正常运维行为，需核对 SSH 源和目的是否在预期列表。",
+    "tags": ["bastion", "ssh", "maintenance", "whitelist"],
+    "category": "maintenance",
+    "attck_ids": [],
+    "cve_ids": []
+  },
+  {
+    "title": "邮件恶意附件检测规则",
+    "content": "邮件网关拦截含恶意宏的文档附件，需核对发件人信誉和附件 hash。",
+    "tags": ["email", "phishing", "macro", "exploit"],
+    "category": "attack",
+    "attck_ids": ["T1566.001", "T1204.002"],
+    "cve_ids": []
+  },
+  {
+    "title": "ATT&CK 初始访问：利用公网暴露应用（T1190）",
+    "content": "攻击者利用面向公网的应用漏洞（如未打补丁的 Web 服务器、VPN、远程桌面）获取初始访问。发现边界主机漏洞利用痕迹应立即隔离并打补丁。",
+    "tags": ["t1190", "initial-access", "exploit", "boundary"],
+    "category": "attack",
+    "attck_ids": ["T1190"],
+    "cve_ids": ["CVE-2021-41773", "CVE-2019-0708"]
+  },
+  {
+    "title": "ATT&CK 执行：PowerShell（T1059.001）",
+    "content": "攻击者使用 PowerShell 执行任意代码：EncodedCommand、DownloadString、IEX 等技巧常见于绕过检测。命中此类特征应视为高置信恶意脚本执行。",
+    "tags": ["t1059", "powershell", "execution", "encodedcommand"],
+    "category": "attack",
+    "attck_ids": ["T1059.001"],
+    "cve_ids": []
+  },
+  {
+    "title": "ATT&CK 凭据访问：LSASS 内存转储（T1003.001）",
+    "content": "攻击者通过转储 LSASS 进程内存提取明文凭据（mimikatz、procdump、rundll32+comsvcs 等）。rundll32 加载非标准 DLL 执行凭证枚举属典型特征。",
+    "tags": ["t1003", "lsass", "credential", "mimikatz", "dump"],
+    "category": "attack",
+    "attck_ids": ["T1003.001"],
+    "cve_ids": []
+  },
+  {
+    "title": "ATT&CK 横向移动：管理共享远程复制（T1021.002）",
+    "content": "攻击者通过 SMB 管理共享（admin$、C$）在主机间复制工具或远程执行。net.exe 枚举 admin$ 共享、PsExec 类工具是常见横向移动前置。",
+    "tags": ["t1021", "lateral", "smb", "admin-share", "psexec"],
+    "category": "attack",
+    "attck_ids": ["T1021.002", "T1570"],
+    "cve_ids": ["CVE-2017-0144"]
+  },
+  {
+    "title": "ATT&CK 命令与控制：应用层协议（T1071）",
+    "content": "攻击者使用标准应用层协议（HTTP/DNS/SMTP）进行 C2 通信，定期信标回连。固定周期的 DNS 解析或与恶意域名的反复连接是典型信标特征。",
+    "tags": ["t1071", "c2", "beacon", "dns", "outbound"],
+    "category": "attack",
+    "attck_ids": ["T1071", "T1568"],
+    "cve_ids": []
+  },
+  {
+    "title": "ATT&CK 防御规避：清除日志（T1070.001）",
+    "content": "攻击者在达成目标后清除安全日志掩盖痕迹。出现安全日志清除操作（如 Windows Event Log 清除）是入侵已发生的强信号。",
+    "tags": ["t1070", "log-clearing", "evasion", "defense"],
+    "category": "attack",
+    "attck_ids": ["T1070.001"],
+    "cve_ids": []
+  },
+  {
+    "title": "CVE-2021-41773：Apache HTTP Server 路径穿越与 RCE",
+    "content": "Apache HTTP Server 2.4.49/2.4.50 存在路径穿越漏洞，可导致文件读取甚至远程代码执行。命中该 CVE 的利用流量应立即隔离 Web 服务器。",
+    "tags": ["cve-2021-41773", "apache", "rce", "path-traversal", "exploit"],
+    "category": "attack",
+    "attck_ids": ["T1190"],
+    "cve_ids": ["CVE-2021-41773"]
+  },
+  {
+    "title": "CVE-2017-0144：EternalBlue SMB 远程代码执行",
+    "content": "SMBv1 远程代码执行漏洞，被 WannaCry 等勒索蠕虫大规模利用。内网出现针对 SMB 的漏洞利用探测（445 端口异常流量）应视为高危。",
+    "tags": ["cve-2017-0144", "smb", "eternalblue", "ransomware", "exploit"],
+    "category": "attack",
+    "attck_ids": ["T1190", "T1210"],
+    "cve_ids": ["CVE-2017-0144"]
+  },
+  {
+    "title": "CVE-2019-0708：BlueKeep RDP 远程代码执行",
+    "content": "远程桌面服务（RDP）预认证远程代码执行漏洞，可被蠕虫化利用。边界主机暴露 3389 端口且出现异常 RDP 探测需重点排查。",
+    "tags": ["cve-2019-0708", "rdp", "bluekeep", "exploit"],
+    "category": "attack",
+    "attck_ids": ["T1190", "T1021.001"],
+    "cve_ids": ["CVE-2019-0708"]
+  },
+  {
+    "title": "勒索软件应急处置预案",
+    "content": "发现勒索加密行为（批量 .encrypted 重命名）时：立即隔离主机与存储、阻断外联、保全内存与日志证据、升级应急响应团队，切勿直接支付赎金。",
+    "tags": ["ransomware", "response", "playbook", "critical"],
+    "category": "response",
+    "attck_ids": ["T1486", "T1490"],
+    "cve_ids": []
+  },
+  {
+    "title": "凭据转储应急处置预案",
+    "content": "发现凭证转储行为（LSASS dump / 凭据枚举）时：冻结相关账号与高权限会话、重置受感染主机上的凭据、排查横向移动范围并溯源攻击入口。",
+    "tags": ["credential", "response", "playbook", "high"],
+    "category": "response",
+    "attck_ids": ["T1003.001"],
+    "cve_ids": []
+  }
+]

@@ -1,0 +1,83 @@
+[
+  {
+    "event_id": "HIST-001",
+    "host": "FIN-WS-014",
+    "user": "finance.zhang",
+    "title": "财务终端疑似 PowerShell 下载执行",
+    "verdict": "人工确认存在恶意下载行为",
+    "risk_level": "high",
+    "timestamp": "2026-04-28T10:14:22"
+  },
+  {
+    "event_id": "HIST-002",
+    "host": "OPS-JUMP-01",
+    "user": "ops.admin",
+    "title": "维护窗口跳板机触发异常登录规则",
+    "verdict": "与变更单一致，判定为误报",
+    "risk_level": "low",
+    "timestamp": "2026-05-02T20:11:03"
+  },
+  {
+    "event_id": "HIST-003",
+    "host": "HR-WS-003",
+    "user": "hr.li",
+    "title": "办公终端短时访问低频域名",
+    "verdict": "继续观察，无进一步恶意行为",
+    "risk_level": "medium",
+    "timestamp": "2026-05-06T11:44:17"
+  },
+  {
+    "event_id": "HIST-004",
+    "host": "DEV-WS-021",
+    "user": "dev.wang",
+    "title": "研发主机异常访问内部敏感共享",
+    "verdict": "人工确认为非授权横向访问",
+    "risk_level": "high",
+    "timestamp": "2026-04-19T17:08:05"
+  },
+  {
+    "event_id": "HIST-005",
+    "host": "MKT-WS-007",
+    "user": "market.chen",
+    "title": "市场终端文档宏触发下载行为",
+    "verdict": "判定为可疑办公宏投递",
+    "risk_level": "medium",
+    "timestamp": "2026-03-27T14:19:48"
+  },
+  {
+    "event_id": "HIST-006",
+    "host": "DB-SRV-002",
+    "user": "svc.db",
+    "title": "数据库服务器异常 Web 根目录写入",
+    "verdict": "确认存在漏洞利用迹象",
+    "risk_level": "high",
+    "timestamp": "2026-05-01T02:33:27"
+  },
+  {
+    "event_id": "HIST-007",
+    "host": "BKP-SRV-001",
+    "user": "backup.svc",
+    "title": "备份窗口批量文件修改规则命中",
+    "verdict": "备份任务触发，判定为误报",
+    "risk_level": "low",
+    "timestamp": "2026-05-10T01:18:39"
+  },
+  {
+    "event_id": "HIST-008",
+    "host": "DMZ-WEB-003",
+    "user": "www-data",
+    "title": "边界主机固定周期 DNS 解析行为",
+    "verdict": "疑似 C2 信标，已升级排查",
+    "risk_level": "high",
+    "timestamp": "2026-05-12T15:07:11"
+  },
+  {
+    "event_id": "HIST-009",
+    "host": "OPS-JUMP-02",
+    "user": "sec.ops",
+    "title": "堡垒机非授权账户枚举操作",
+    "verdict": "人工确认存在越权运维行为",
+    "risk_level": "medium",
+    "timestamp": "2026-04-25T21:45:08"
+  }
+]

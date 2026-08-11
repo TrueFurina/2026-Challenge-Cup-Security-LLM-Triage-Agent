@@ -1,0 +1,30 @@
+# ── Python / 虚拟环境 / 缓存 ─────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv*/
+venv/
+build/
+dist/
+
+# ── 运行时生成数据（每次研判产生，不进仓库） ──
+security_agent/data/ledger/
+security_agent/data/triage_history.jsonl
+security_agent/data/review_feedback.jsonl
+security_agent/data/*_backup_*.db
+
+# ── 评测/报告导出 ─────────────────────────
+reports/
+
+# ── 日志 / 临时文件 ────────────────────────
+*.log
+*.tmp
+_eval_tmp.json
+_goal_eval.json
+_p2_eval.json
+
+# ── 编辑器 / 系统 ──────────────────────────
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "description": "确定性预筛规则集（阶段 1）：攻击规则优先于误报规则，安全优先。支持用户编辑，修改后重启生效。",
+  "attack_rules": [
+    {
+      "id": "ATK-PS-ENCODED",
+      "description": "PowerShell 编码命令下载执行",
+      "keywords": ["encodedcommand", "downloadstring", "invoke-expression"],
+      "risk_level": "critical",
+      "event_type": "恶意脚本执行"
+    },
+    {
+      "id": "ATK-WEBSHELL",
+      "description": "WebShell 上传/访问",
+      "keywords": ["shell.jsp", "webshell", "cmd=whoami", "eval("],
+      "risk_level": "critical",
+      "event_type": "WebShell 攻击"
+    },
+    {
+      "id": "ATK-RANSOM",
+      "description": "勒索加密活动",
+      "keywords": [".encrypted", "encrypt", "ransomware"],
+      "risk_level": "critical",
+      "event_type": "勒索软件加密"
+    },
+    {
+      "id": "ATK-MACRO",
+      "description": "恶意宏/载荷投递",
+      "keywords": ["macro", "docm", "exploit payload"],
+      "risk_level": "high",
+      "event_type": "恶意载荷投递"
+    },
+    {
+      "id": "ATK-CRED-DUMP",
+      "description": "凭据转储/枚举",
+      "keywords": ["enumeratecredentials", "mimikatz", "lsass", "minidump", "cred.dll"],
+      "risk_level": "high",
+      "event_type": "凭据转储"
+    },
+    {
+      "id": "ATK-LATERAL",
+      "description": "横向移动/管理共享访问",
+      "keywords": ["admin$", "share=admin", "net.exe"],
+      "risk_level": "high",
+      "event_type": "横向移动前置"
+    },
+    {
+      "id": "ATK-C2-INTEL",
+      "description": "已知恶意情报命中（C2/信标）",
+      "type": "intel_malicious",
+      "risk_level": "high",
+      "event_type": "已知 C2 情报命中"
+    }
+  ],
+  "false_positive_rules": [
+    {
+      "id": "FP-WHITELIST",
+      "description": "命中白名单资产特征",
+      "keywords": ["whitelist", "白名单"]
+    },
+    {
+      "id": "FP-MAINTENANCE",
+      "description": "维护窗口/例行任务特征",
+      "type": "maintenance_window",
+      "keywords": ["maintenance", "例行任务", "例行"]
+    },
+    {
+      "id": "FP-CHANGE-TICKET",
+      "description": "存在变更单关联",
+      "type": "change_ticket"
+    },
+    {
+      "id": "FP-BASELINE",
+      "description": "事件进程命中基线进程且行为含例行特征",
+      "type": "baseline_process",
+      "routine_keywords": ["例行", "maintenance", "backup", "备份", "同步", "sync", "scan", "扫描", "routine", "批量"]
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+[
+  {
+    "indicator": "203.0.113.50",
+    "indicator_type": "ip",
+    "reputation": "malicious",
+    "note": "疑似载荷分发节点，近 30 天多次出现在恶意下载样本中"
+  },
+  {
+    "indicator": "paste-sync.example",
+    "indicator_type": "domain",
+    "reputation": "malicious",
+    "note": "情报平台记录为短期恶意中转域名"
+  },
+  {
+    "indicator": "suspicious-domain.test",
+    "indicator_type": "domain",
+    "reputation": "unknown",
+    "note": "暂无明确恶意结论，仅记录为低频访问域名"
+  },
+  {
+    "indicator": "10.10.9.7",
+    "indicator_type": "ip",
+    "reputation": "internal_sensitive",
+    "note": "内部敏感文件服务器，出现非授权访问需重点排查"
+  },
+  {
+    "indicator": "cdn-sync-share.example",
+    "indicator_type": "domain",
+    "reputation": "suspicious",
+    "note": "低信誉文件分发域名，曾关联办公宏投递活动"
+  },
+  {
+    "indicator": "198.51.100.77",
+    "indicator_type": "ip",
+    "reputation": "malicious",
+    "note": "已知 WebShell 回连地址"
+  },
+  {
+    "indicator": "ops-cache-update.example",
+    "indicator_type": "domain",
+    "reputation": "malicious",
+    "note": "疑似利用链中的二阶段控制域名"
+  },
+  {
+    "indicator": "control-node.example",
+    "indicator_type": "domain",
+    "reputation": "malicious",
+    "note": "典型 DNS C2 控制域名"
+  },
+  {
+    "indicator": "203.0.113.88",
+    "indicator_type": "ip",
+    "reputation": "malicious",
+    "note": "已知信标回连 IP"
+  }
+]

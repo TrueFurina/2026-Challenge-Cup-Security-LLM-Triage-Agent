@@ -1,0 +1,82 @@
+[
+  {
+    "event_id": "EVENT-001",
+    "title": "域控服务器 PowerShell 编码命令下载执行",
+    "expected_risk_level": "critical",
+    "expected_false_positive": false,
+    "expected_event_type": "恶意脚本执行",
+    "category": "高危脚本执行"
+  },
+  {
+    "event_id": "EVENT-002",
+    "title": "打印机服务器白名单扫描告警（误报）",
+    "expected_risk_level": "low",
+    "expected_false_positive": true,
+    "expected_event_type": "误报",
+    "category": "运维误报"
+  },
+  {
+    "event_id": "EVENT-003",
+    "title": "OA 服务器异常外联至疑似 C2 域名",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "异常外联",
+    "category": "异常外联"
+  },
+  {
+    "event_id": "EVENT-004",
+    "title": "研发服务器管理共享访问（横向移动前置）",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "横向移动前置",
+    "category": "凭证与横向前置"
+  },
+  {
+    "event_id": "EVENT-005",
+    "title": "财务服务器异常 SSH 登录尝试",
+    "expected_risk_level": "medium",
+    "expected_false_positive": false,
+    "expected_event_type": "异常登录",
+    "category": "异常登录"
+  },
+  {
+    "event_id": "EVENT-006",
+    "title": "Web 服务器 WebShell 上传攻击",
+    "expected_risk_level": "critical",
+    "expected_false_positive": false,
+    "expected_event_type": "WebShell 攻击",
+    "category": "漏洞利用与 WebShell"
+  },
+  {
+    "event_id": "EVENT-007",
+    "title": "文件服务器勒索加密活动",
+    "expected_risk_level": "critical",
+    "expected_false_positive": false,
+    "expected_event_type": "勒索软件加密",
+    "category": "勒索加密"
+  },
+  {
+    "event_id": "EVENT-008",
+    "title": "终端设备凭据转储行为",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "凭据转储",
+    "category": "凭据转储"
+  },
+  {
+    "event_id": "EVENT-009",
+    "title": "堡垒机跳转至核心网段（运维核查）",
+    "expected_risk_level": "low",
+    "expected_false_positive": false,
+    "expected_event_type": "异常登录",
+    "category": "堡垒机运维"
+  },
+  {
+    "event_id": "EVENT-010",
+    "title": "邮件网关拦截恶意宏附件投递",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "恶意载荷投递",
+    "category": "恶意载荷投递"
+  }
+]
