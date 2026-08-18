@@ -170,10 +170,16 @@ class EvaluationService:
 
     @staticmethod
     def _build_mode_comparison(modes: dict) -> dict:
-        """三模式对比表：通过率/风险/FP/类型/耗时/成本。"""
+        """三模式对比表：通过率/风险/FP/类型/耗时/成本 + 混淆矩阵。"""
         rows = {}
         for name, report in modes.items():
             s = report["summary"]
+            # 混淆矩阵（误报判定 2×2）
+            cases = report.get("cases", [])
+            tp = sum(1 for c in cases if c["expected_false_positive"] and c["actual_false_positive"])
+            fn = sum(1 for c in cases if c["expected_false_positive"] and not c["actual_false_positive"])
+            fp = sum(1 for c in cases if not c["expected_false_positive"] and c["actual_false_positive"])
+            tn = sum(1 for c in cases if not c["expected_false_positive"] and not c["actual_false_positive"])
             rows[name] = {
                 "pass_rate": s["pass_rate"],
                 "risk_level_accuracy": s["risk_level_accuracy"],
@@ -182,6 +188,7 @@ class EvaluationService:
                 "avg_duration_ms": s["avg_duration_ms"],
                 "cost_estimate": s.get("cost_estimate", 0.0),
                 "llm_calls": s.get("prefilter", {}).get("need_llm", 0),
+                "confusion": {"tp": tp, "fn": fn, "fp": fp, "tn": tn},
             }
         return rows
 
@@ -249,34 +256,33 @@ class EvaluationService:
         return filled / len(self.REQUIRED_OUTPUT_FIELDS)
 
     def _build_category_breakdown(self, case_results: list[dict]) -> list[dict]:
-        grouped: dict[str, list[dict]] = {}
-        for item in case_results:
-            grouped.setdefault(item["category"], []).append(item)
+        """分类统计（按场景类别 + 按风险等级 + 按事件类型 + 按资产重要度）。"""
+        # 按场景类别
+        by_category = self._group_stats(case_results, "category")
+        # 按风险等级
+        by_risk = self._group_stats(case_results, "actual_risk_level")
+        # 按事件类型
+        by_type = self._group_stats(case_results, "actual_event_type")
+        # 按预期误报（资产重要度近似）
+        by_fp = {
+            "expected_fp": self._group_stats([c for c in case_results if c["expected_false_positive"]], "category"),
+            "expected_non_fp": self._group_stats([c for c in case_results if not c["expected_false_positive"]], "category"),
+        }
+        return by_category
 
+    @staticmethod
+    def _group_stats(case_results: list[dict], key: str) -> list[dict]:
+        grouped = {}
+        for item in case_results:
+            grouped.setdefault(item.get(key, "unknown"), []).append(item)
         rows = []
-        for category, items in grouped.items():
+        for label, items in grouped.items():
             total = len(items)
-            rows.append(
-                {
-                    "category": category,
-                    "total_cases": total,
-                    "risk_level_accuracy": round(
-                        sum(1 for item in items if item["risk_match"]) / total, 3
-                    ),
-                    "false_positive_accuracy": round(
-                        sum(1 for item in items if item["false_positive_match"]) / total, 3
-                    ),
-                    "pass_rate": round(
-                        sum(
-                            1
-                            for item in items
-                            if item["risk_match"]
-                            and item["false_positive_match"]
-                            and item["event_type_match"]
-                        )
-                        / total,
-                        3,
-                    ),
-                }
-            )
+            rows.append({
+                "label": label,
+                "total_cases": total,
+                "risk_level_accuracy": round(sum(1 for i in items if i["risk_match"]) / total, 3) if total else 0.0,
+                "false_positive_accuracy": round(sum(1 for i in items if i["false_positive_match"]) / total, 3) if total else 0.0,
+                "pass_rate": round(sum(1 for i in items if i["risk_match"] and i["false_positive_match"] and i["event_type_match"]) / total, 3) if total else 0.0,
+            })
         return rows

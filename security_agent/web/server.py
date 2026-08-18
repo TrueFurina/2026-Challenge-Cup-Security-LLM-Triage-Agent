@@ -511,6 +511,7 @@ class SecurityAgentHandler(BaseHTTPRequestHandler):
 </div>
 """
         bars = []
+        confusion_blocks = []
         for mode_name, mode in comparison.items():
             pass_rate = mode.get("pass_rate", 0)
             cost = mode.get("cost_estimate", 0)
@@ -526,11 +527,30 @@ class SecurityAgentHandler(BaseHTTPRequestHandler):
   </div>
 """
             )
+            # 混淆矩阵（2×2）
+            cm = mode.get("confusion", {})
+            if cm:
+                confusion_blocks.append(
+                    f"""
+<div class="card" style="margin-top: 10px;">
+  <h4>{html.escape(mode_name)} — 误报判定混淆矩阵</h4>
+  <table class="table" style="max-width: 380px;">
+    <thead><tr><th>实际 \ 预期</th><th>预期误报</th><th>预期非误报</th></tr></thead>
+    <tbody>
+      <tr><td>判定误报</td><td class="sev sev-low">{cm.get('tp', 0)}</td><td class="sev sev-high">{cm.get('fp', 0)}</td></tr>
+      <tr><td>判定非误报</td><td class="sev sev-high">{cm.get('fn', 0)}</td><td class="sev sev-low">{cm.get('tn', 0)}</td></tr>
+    </tbody>
+  </table>
+</div>
+"""
+                )
         return f"""
 <div class="result-block">
   <h3>三模式对比评测</h3>
   <p class="lede">对比 纯规则 / 纯 LLM / 预筛+LLM 混合 三种模式（通过率越高条越长）。</p>
   {''.join(bars)}
+  <h3 style="margin-top: 16px;">混淆矩阵（误报识别能力）</h3>
+  {''.join(confusion_blocks) if confusion_blocks else '<p class="lede">暂无混淆矩阵数据</p>'}
   <div class="toolbar">
     <a class="btn btn-primary" href="/generate-modes">重新生成</a>
     <a class="btn" href="/api/evaluation-modes">查看对比 JSON</a>

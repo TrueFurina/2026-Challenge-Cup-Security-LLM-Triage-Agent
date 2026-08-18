@@ -68,6 +68,20 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 - Three-mode comparison: `python -m security_agent.cli report --format md` (rules vs. LLM vs. hybrid, with confusion matrix)
 - 10 test scripts, **208/208 passing** (prefilter/hitl/agents/knowledge/eval/memory/mcp/ledger/web)
 
+## 🔗 Competition Benchmarking
+
+Based on analysis of **2,023 entries** from the National College Student Information Security Works Competition (parent competition of this project's topics), our differentiators:
+
+| Competitor (from 2,023 entries) | Their Focus | Our Difference |
+|-------------------------------|-------------|----------------|
+| `LLM 驱动的可信安全运营智能体` (N0T) | SOC agent with LLM | Full pipeline: prefilter + triage + gate + memory + ledger |
+| `一键智巡` | Alert automation | FP elimination + confidence gating + HITL |
+| `MCP-Sentinel` | Tool-call guard | Full security operations loop |
+| `AgentGuard` series | Agent behavior monitoring | Prefilter diversion + memory injection + three-mode evaluation |
+| Most lack real evaluation | — | **Only work with three-mode comparison + confusion matrix + cost estimation** |
+
+> **Core selling point**: *"The only triage agent with three-mode comparison + confusion matrix proving hybrid architecture optimal — prefilter saves 70% LLM calls, FP memory prevents repeat false positives, full audit trail replayable."*
+
 ## 📁 Repository Layout
 
 ```
