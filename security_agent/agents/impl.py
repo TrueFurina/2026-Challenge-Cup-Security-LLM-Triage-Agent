@@ -232,6 +232,8 @@ class TriageAgent(BaseAgent):
                     history_items=context.get("history_items") or [],
                     # 阶段 2 HITL：人工对该事件的复核反馈作为证据注入
                     human_feedback=context.get("human_feedback"),
+                    # LLM 调用审计钩子（透传给 triage_event → ai_chat_json）
+                    on_llm_call=context.get("on_llm_call"),
                 )
             else:
                 analysis = triage_event(
@@ -247,6 +249,8 @@ class TriageAgent(BaseAgent):
                     history_items=context.get("history_items") or [],
                     # 阶段 2：注入人工复核反馈（由 orchestrator 经 feedback.latest 取回）
                     human_feedback=context.get("human_feedback"),
+                    # LLM 调用审计钩子：使 Ledger 记录本次 AI 调用的 prompt/response
+                    on_llm_call=context.get("on_llm_call"),
                 )
             if analysis is None:
                 return AgentOutput(

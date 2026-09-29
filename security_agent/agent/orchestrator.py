@@ -118,6 +118,15 @@ class SecurityAgent:
             else None
         )
 
+        # LLM 调用审计回调：把 AI 的 prompt/response 写入审计链路，使 Ledger 能回答
+        # 「AI 凭什么这么判」。此为本次新增接线——此前 `LedgerRecord.record_llm()` 从未被
+        # 生产调用（同族「实现了却不接线」缺陷第三例），导致 ledger 只有工具/阶段步骤、
+        # 独缺 AI 自身证据。仅在审计开启时挂接；评测沙箱 record_ledger=False → 传入 None，
+        # 与修复前代码路径等价，评测结果不受影响。回调本身由 ai/client 侧 try/except 兜住。
+        def on_llm_call(prompt: str, response: str) -> None:
+            if ledger is not None:
+                ledger.record_llm(prompt, response)
+
         knowledge_items, knowledge_observation = self.knowledge_hub.retrieve_knowledge(event)
         asset_tool = self.tool_registry.get("asset_lookup")
         log_tool = self.tool_registry.get("log_lookup")
@@ -215,6 +224,8 @@ class SecurityAgent:
             "prefilter_result": prefilter_result,
             "history_items": history_items,
             "human_feedback": human_feedback,
+            # LLM 调用审计钩子（ledger 关闭时为 None，评测路径等价）
+            "on_llm_call": on_llm_call if ledger is not None else None,
             "force_rule_fallback": getattr(self, "force_rule_fallback", False),
         }
         agent_input = AgentInput(
