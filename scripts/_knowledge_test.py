@@ -103,7 +103,9 @@ def orchestrator_hit_tests():
 
     app = build_app()
     app.llm = MockLLM()
-    result = app.triage_event("EVENT-006").to_dict()
+    # 复用评测沙箱：本测试的 triage 裁决不应写入真实记忆 / ledger
+    with app.evaluation_sandbox():
+        result = app.triage_event("EVENT-006").to_dict()
     hits = result.get("knowledge_hits", [])
     check("knowledge_hits 非空", len(hits) > 0, True)
     check("命中含 ATT&CK 标注", any("ATT&CK:" in h for h in hits), True)

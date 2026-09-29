@@ -2,11 +2,11 @@ import html
 import json
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from security_agent.app import build_app
 from security_agent.config import AppConfig
+from security_agent.hitl import HumanFeedbackStore
 from security_agent.reporting.render import render_markdown_report
 
 # 阶段 9：三模式对比结果缓存（避免每次刷新都跑真实 LLM 全量评测）
@@ -482,8 +482,8 @@ class SecurityAgentHandler(BaseHTTPRequestHandler):
         global _MODE_COMPARISON_CACHE
         try:
             app = build_app()
-            app.record_history = False
-            app.record_ledger = False
+            # 记忆/审计轨迹的评测隔离由 SecurityAgent.evaluation_sandbox() 统一持有，
+            # 此处不再手动设开关（避免与沙箱重复、各自漂移）。
             report = app.evaluation_service.evaluate_modes(app)
             _MODE_COMPARISON_CACHE = {"data": report, "ts": datetime.now().timestamp()}
         except Exception as exc:  # noqa: BLE001 - 生成失败不崩溃
@@ -535,7 +535,7 @@ class SecurityAgentHandler(BaseHTTPRequestHandler):
 <div class="card" style="margin-top: 10px;">
   <h4>{html.escape(mode_name)} — 误报判定混淆矩阵</h4>
   <table class="table" style="max-width: 380px;">
-    <thead><tr><th>实际 \ 预期</th><th>预期误报</th><th>预期非误报</th></tr></thead>
+    <thead><tr><th>实际 / 预期</th><th>预期误报</th><th>预期非误报</th></tr></thead>
     <tbody>
       <tr><td>判定误报</td><td class="sev sev-low">{cm.get('tp', 0)}</td><td class="sev sev-high">{cm.get('fp', 0)}</td></tr>
       <tr><td>判定非误报</td><td class="sev sev-high">{cm.get('fn', 0)}</td><td class="sev sev-low">{cm.get('tn', 0)}</td></tr>
@@ -688,30 +688,33 @@ class SecurityAgentHandler(BaseHTTPRequestHandler):
         self.send_error(404, "Not Found")
 
     # ── 阶段 2：HITL 复核回写 ─────────────────────────────
-    def _review_feedback_path(self) -> Path:
-        return Path(__file__).resolve().parent.parent / "data" / "review_feedback.jsonl"
+    @staticmethod
+    def _feedback_store() -> HumanFeedbackStore:
+        """人工复核反馈的读写持有者（`security_agent.hitl.store`）。"""
+        return HumanFeedbackStore()
 
-    def _latest_review(self, event_id: str):
-        """读取复核回写记录，返回该事件最新的复核记录；无记录返回 None。"""
-        path = self._review_feedback_path()
-        if not path.exists():
-            return None
-        latest = None
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return None
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if record.get("event_id") == event_id:
-                latest = record
-        return latest
+    @staticmethod
+    def _render_review_form(result: dict) -> str:
+        """复核表单：除 event_id/decision 外，回传**当前这版裁决摘要**。
+
+        摘要是读回能落到 `review_status` 的前提——Agent 必须知道人否定/采纳的是
+        哪一个结论，才能判断该反馈是否适用于下一次研判（见 ReviewerAgent 注释）。
+
+        按钮语义：`confirm`=采纳该裁决（无论判攻击还是判误报）；`reject`=否定该
+        裁决。旧文案写作「确认(事件成立)/驳回(判定误报)」是把「驳回」窄化成「人
+        认为是误报」，与 Error567Decision 字段语义不符——驳回也可能是否定某个
+        误报判定（实际是真攻击）。
+        """
+        return f"""
+  <form class="review-form" method="post" action="/review-event">
+    <input type="hidden" name="event_id" value="{html.escape(result["event_id"])}">
+    <input type="hidden" name="event_type" value="{html.escape(result.get("event_type", ""))}">
+    <input type="hidden" name="risk_level" value="{html.escape(result.get("risk_level", ""))}">
+    <input type="hidden" name="is_false_positive" value="{'true' if result.get('is_false_positive') else 'false'}">
+    <input type="text" name="note" placeholder="复核意见（可选）">
+    <button class="btn btn-primary" type="submit" name="decision" value="confirm">确认（采纳该结论）</button>
+    <button class="btn" type="submit" name="decision" value="reject">驳回（结论有误）</button>
+  </form>"""
 
     def _handle_review(self):
         """人工复核反馈回写：确认/驳回 → 追加到 review_feedback.jsonl。"""
@@ -725,22 +728,21 @@ class SecurityAgentHandler(BaseHTTPRequestHandler):
             self._send_html(_page("复核失败", "<h2>复核失败</h2><p>缺少事件 ID 或非法的复核决定。</p>"))
             return
 
-        path = self._review_feedback_path()
-        record = {
-            "event_id": event_id,
-            "decision": decision,
-            "note": note,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        }
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-        except OSError as exc:
-            self._send_html(_page("复核失败", f"<h2>复核失败</h2><p>回写失败: {html.escape(str(exc))}</p>"))
+        # 回写经 `HumanFeedbackStore`（与 Agent 读侧同一数据源）：写入端若自行
+        # 拼 JSON、缺了裁决摘要字段，读回时就永远判不出该反馈适用于哪版结论。
+        ok = self._feedback_store().append(
+            event_id=event_id,
+            decision=decision,
+            note=note,
+            event_type=form.get("event_type", [""])[0],
+            risk_level=form.get("risk_level", [""])[0],
+            is_false_positive=form.get("is_false_positive", [""])[0] == "true",
+        )
+        if not ok:
+            self._send_html(_page("复核失败", "<h2>复核失败</h2><p>反馈回写失败，请查看日志。</p>"))
             return
 
-        # 复核后回到首页并选中该事件，展示最新复核状态
+        # 复核后回到首页并选中该事件，展示最新复核状态（由 Agent 链路读回渲染）
         self.send_response(302)
         self.send_header("Location", f"/?event_id={html.escape(event_id)}")
         self.end_headers()
@@ -988,25 +990,37 @@ class SecurityAgentHandler(BaseHTTPRequestHandler):
         raw = html.escape(json.dumps(result, ensure_ascii=False, indent=2))
         false_positive = "是" if result["is_false_positive"] else "否"
 
-        # 阶段 2：HITL —— 优先读取复核回写记录，已人工复核则显示复核结果
-        latest_review = self._latest_review(result["event_id"])
+        # 阶段 2：HITL —— 复核状态取**Agent 链路读回的那份反馈**（单一真源）。
+        # 原先本函数自行解析 `review_feedback.jsonl`（`_latest_review`）另算一套展示，
+        # 而 Agent 侧完全不读该文件：页面说「已人工确认」、研判链路却当无事发生，
+        # 两处口径各自漂移。现统一以 result["human_feedback"] + review_status 为准。
+        fb = result.get("human_feedback") or {}
+        fb_decision = fb.get("decision", "")
+        status = result.get("review_status", "")
+        note_html = f"<small>（{html.escape(fb.get('note', '') or '')}）</small>" if fb.get("note") else ""
         review_banner = ""
-        if latest_review is not None:
-            note_html = f"<small>（{html.escape(latest_review.get('note', ''))}）</small>" if latest_review.get("note") else ""
-            if latest_review.get("decision") == "confirm":
-                review_banner = f'<div class="review-banner review-confirmed">✅ 已人工确认（事件成立）{note_html}</div>'
-            else:
-                review_banner = f'<div class="review-banner review-rejected">⛔ 已人工驳回（判定误报）{note_html}</div>'
-        elif result.get("needs_human_review", False) or result.get("review_status") == "pending_review":
+        if status == "human_confirmed":
+            review_banner = f'<div class="review-banner review-confirmed">✅ 已人工确认（该裁决已被运营人员采纳）{note_html}</div>'
+        elif status == "human_rejected":
+            review_banner = (
+                f'<div class="review-banner review-rejected">⛔ 已人工驳回：Agent 本次结论与人工'
+                f'否定的那版一致，已挂起待仲裁{note_html}</div>'
+            )
+        elif fb_decision:
+            # 有复核记录，但它针对的是另一版裁决（本次结论已不同）→ 需再次复核
+            label = "确认" if fb_decision == "confirm" else "驳回"
+            review_banner = f"""
+<div class="review-banner review-pending">
+  ⚠️ <strong>结论已变化，需重新复核</strong>：存在上一版的人工{label}记录，
+  但本次研判结论与之不同{html.escape('（' + fb.get('timestamp','')[:10] + '）') if fb.get('timestamp') else ''}。
+  {self._render_review_form(result)}
+</div>
+"""
+        elif result.get("needs_human_review", False) or status == "pending_review":
             review_banner = f"""
 <div class="review-banner review-pending">
   ⚠️ <strong>待人工复核</strong>：本结果置信度低（{html.escape(result.get("confidence", ""))}），未自动处置，需人工确认。
-  <form class="review-form" method="post" action="/review-event">
-    <input type="hidden" name="event_id" value="{html.escape(result["event_id"])}">
-    <input type="text" name="note" placeholder="复核意见（可选）">
-    <button class="btn btn-primary" type="submit" name="decision" value="confirm">确认（事件成立）</button>
-    <button class="btn" type="submit" name="decision" value="reject">驳回（判定误报）</button>
-  </form>
+  {self._render_review_form(result)}
 </div>
 """
 

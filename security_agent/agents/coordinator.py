@@ -1,7 +1,7 @@
 """AgentCoordinator 顺序编排器（阶段 3.3）。
 
 串行调用 4 个协作 Agent，前序 Agent 输出作为后序 Agent 输入：
-TriageAgent → HuntAgent → RespondAgent → ReportAgent
+PlannerAgent → ClassifierAgent → TriageAgent → ReviewerAgent
 
 设计原则：
 1. 任一步骤失败 → 降级到已有结论，不中断（fail-open）
@@ -24,14 +24,9 @@ class AgentCoordinator:
 
     @classmethod
     def default_agents(cls) -> list[BaseAgent]:
-        from security_agent.agents.impl import (
-            HuntAgent,
-            ReportAgent,
-            RespondAgent,
-            TriageAgent,
-        )
+        from security_agent.agents.impl import _default_pipeline
 
-        return [TriageAgent(), HuntAgent(), RespondAgent(), ReportAgent()]
+        return _default_pipeline()
 
     def coordinate(self, agent_input: AgentInput) -> dict:
         """执行全链路协作，返回 {agent_records, final_report, context}。"""
@@ -70,6 +65,7 @@ class AgentCoordinator:
                 {
                     "name": agent.name,
                     "role": agent.role,
+                    "focus": getattr(agent, "focus", ""),
                     "used_tools": agent.used_tools,
                     "findings": output.findings,
                     "summary": output.summary,

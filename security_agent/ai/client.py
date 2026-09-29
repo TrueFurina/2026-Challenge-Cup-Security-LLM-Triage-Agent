@@ -30,6 +30,84 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_SECONDS = 45
 CONNECT_TIMEOUT_SECONDS = 10.0
 
+# 推理型模型（如 deepseek-v4-flash）先产出 reasoning_content，且推理 token 同样
+# 计入 max_tokens 预算。预算偏小时推理尚未结束正文已被截断：content 为空或只剩
+# 半截 JSON，调用方随即静默回退规则引擎——表面「已接入真 LLM」，实际 AI 未生效。
+# 故对输出预算设下限。max_tokens 只是上限、按实际生成计费，调高不产生额外成本。
+# 如需覆盖，设置环境变量 SECURITY_AGENT_LLM_MAX_TOKENS（设为 0 可关闭下限）。
+DEFAULT_MAX_OUTPUT_TOKENS = 8000
+
+# ── 用量计量 ──────────────────────────────────────────────
+# token 数为实测计数（取自 API 响应的 usage 字段），不是事后推断；
+# 单价为显式假设，可用环境变量覆盖。评测报告中的成本必须基于此计量，
+# 不得再使用「单次调用 ≈ 固定金额」之类的硬编码近似。
+_USAGE: dict[str, int] = {
+    "requests": 0,
+    "failed_requests": 0,
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "reasoning_tokens": 0,
+    "truncated_responses": 0,
+}
+
+DEFAULT_PROMPT_PRICE_PER_MILLION = 2.0  # 元/百万 token（假设值，可按实际合同价覆盖）
+DEFAULT_COMPLETION_PRICE_PER_MILLION = 8.0
+
+
+def get_usage_stats() -> dict:
+    """返回本进程累计的 LLM 用量快照（实测计数）。"""
+    return dict(_USAGE)
+
+
+def reset_usage_stats() -> None:
+    """清零用量统计（分模式评测时使用，避免模式间串扰）。"""
+    for key in _USAGE:
+        _USAGE[key] = 0
+
+
+def estimate_cost_yuan(stats: Optional[dict] = None) -> float:
+    """按实测 token 用量估算成本（元）。
+
+    返回值为**估算**：token 数实测，单价假设可由
+    SECURITY_AGENT_PROMPT_PRICE_PER_M / SECURITY_AGENT_COMPLETION_PRICE_PER_M
+    （元/百万 token）覆盖，默认取 DeepSeek 公开价目量级。
+    """
+    stats = _USAGE if stats is None else stats
+    price_in = _read_price_env("SECURITY_AGENT_PROMPT_PRICE_PER_M", DEFAULT_PROMPT_PRICE_PER_MILLION)
+    price_out = _read_price_env(
+        "SECURITY_AGENT_COMPLETION_PRICE_PER_M", DEFAULT_COMPLETION_PRICE_PER_MILLION
+    )
+    cost = (
+        stats.get("prompt_tokens", 0) / 1_000_000 * price_in
+        + stats.get("completion_tokens", 0) / 1_000_000 * price_out
+    )
+    return round(cost, 6)
+
+
+def _read_price_env(name: str, fallback: float) -> float:
+    try:
+        raw = os.getenv(name, "").strip()
+        return float(raw) if raw else fallback
+    except ValueError:
+        return fallback
+
+
+def _record_usage(data: Any) -> None:
+    """累计一次成功请求的真实 token 用量；异常不影响主流程。"""
+    try:
+        usage = data.get("usage") or {}
+        choice = (data.get("choices") or [{}])[0]
+        _USAGE["requests"] += 1
+        _USAGE["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
+        _USAGE["completion_tokens"] += int(usage.get("completion_tokens") or 0)
+        _USAGE["reasoning_tokens"] += int(
+            (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
+        )
+        if choice.get("finish_reason") == "length":
+            _USAGE["truncated_responses"] += 1
+    except Exception:  # noqa: BLE001 - 计量失败不得影响研判主流程
+        pass
+
 
 # ── 对外核心 API ──────────────────────────────────────────
 
@@ -79,6 +157,7 @@ def ai_chat(
             logger.warning("LLM 返回了空内容")
         return content
     except Exception as exc:  # noqa: BLE001 - 失败开放：任何异常都不外抛
+        _USAGE["failed_requests"] += 1
         logger.warning("AI 调用失败（fail-open 返回 None）: %s", exc)
         return None
 
@@ -153,6 +232,17 @@ def _resolve_settings() -> dict:
     except ValueError:
         timeout_seconds = DEFAULT_TIMEOUT_SECONDS
 
+    try:
+        max_output_tokens = max(
+            int(
+                os.getenv("SECURITY_AGENT_LLM_MAX_TOKENS", "").strip()
+                or DEFAULT_MAX_OUTPUT_TOKENS
+            ),
+            0,
+        )
+    except ValueError:
+        max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
+
     if httpx is not None:
         timeout = httpx.Timeout(
             connect=CONNECT_TIMEOUT_SECONDS,
@@ -168,6 +258,7 @@ def _resolve_settings() -> dict:
         "base_url": base_url,
         "model": model,
         "timeout": timeout,
+        "max_output_tokens": max_output_tokens,
     }
 
 
@@ -185,11 +276,13 @@ def _post_chat(
         logger.warning("httpx 未安装，无法发起 LLM 请求")
         return None
 
+    # 应用输出预算下限（推理型模型的 reasoning_content 也占预算，见模块顶部说明）
+    effective_max_tokens = max(int(max_tokens), int(settings.get("max_output_tokens", 0)))
     payload = {
         "model": settings["model"],
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_tokens": effective_max_tokens,
     }
     headers = {
         "Content-Type": "application/json",
@@ -202,7 +295,51 @@ def _post_chat(
         timeout=settings["timeout"],
     )
     response.raise_for_status()
-    return _extract_content(response.json())
+    data = response.json()
+    _record_usage(data)
+    content = _extract_content(data)
+    if content is None:
+        _log_empty_response(data, effective_max_tokens)
+    return content
+
+
+def _log_empty_response(data: Any, max_tokens: int) -> None:
+    """定位「LLM 返回空内容」的真实原因，避免截断被静默当成普通失败。
+
+    推理型模型最常见的空返回并非网络或密钥问题，而是输出预算被 reasoning_content
+    吃满导致正文截断；此处显式区分并给出可操作的提示。
+    """
+    try:
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        finish_reason = choice.get("finish_reason")
+        reasoning = message.get("reasoning_content") or ""
+        content = message.get("content") or ""
+        usage = data.get("usage") or {}
+        reasoning_tokens = (usage.get("completion_tokens_details") or {}).get(
+            "reasoning_tokens", 0
+        )
+    except Exception:  # noqa: BLE001 - 日志路径不应抛出
+        logger.warning("LLM 返回空内容，且响应结构无法解析")
+        return
+
+    if finish_reason == "length":
+        logger.warning(
+            "LLM 输出被截断：max_tokens=%s 已被耗尽（其中推理 %s token，正文仅 %s 字符）。"
+            "推理型模型需为 reasoning_content 预留预算，可用环境变量 "
+            "SECURITY_AGENT_LLM_MAX_TOKENS 提高上限",
+            max_tokens,
+            reasoning_tokens,
+            len(content),
+        )
+    elif reasoning and not content:
+        logger.warning(
+            "LLM 仅返回 reasoning_content，正文为空（finish_reason=%s，推理 %s token）",
+            finish_reason,
+            reasoning_tokens,
+        )
+    else:
+        logger.warning("LLM 响应中未找到可用正文（finish_reason=%s）", finish_reason)
 
 
 def _with_system(messages: list[dict], system: Optional[str]) -> list[dict]:

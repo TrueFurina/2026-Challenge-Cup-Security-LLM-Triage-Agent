@@ -7,9 +7,16 @@
 3. 工单门控：低置信 → 待复核记录（REVIEW-），高置信 → P 级工单（TICKET-）
 4. 端到端（Mock）：EVENT-002 预筛 AUTO_CLOSE → confidence high → auto_reviewed
 5. 复核回写文件 review_feedback.jsonl 存在且 JSON 可解析
+6. HumanFeedbackStore：写入校验 / latest / 摘要匹配 / 旧格式与脏数据容错
+7. 读回闭环（集成）：确认 → human_confirmed；驳回相同结论 → human_rejected
+   + 强制挂起 + 被驳回裁决不写入误报记忆
+8. 评测沙箱对 feedback 的读隔离（与 memory 同口径）
 """
+import json
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
@@ -17,6 +24,8 @@ os.chdir(PROJECT_DIR)
 
 from security_agent.ai.triage import CONFIDENCE_SCORES, _parse_llm_result  # noqa: E402
 from security_agent.agent.models import SecurityEvent, ToolObservation  # noqa: E402
+from security_agent.hitl import HumanFeedbackStore  # noqa: E402
+from security_agent.memory import MemoryStore  # noqa: E402
 from security_agent.tools.implementations import TicketGeneratorTool  # noqa: E402
 
 PASS = 0
@@ -109,7 +118,9 @@ def e2e_tests():
 
     app = build_app()
     app.llm = MockLLM()
-    result = app.triage_event("EVENT-002")
+    # 复用评测沙箱：本测试的 triage 裁决不应写入真实记忆 / ledger
+    with app.evaluation_sandbox():
+        result = app.triage_event("EVENT-002")
     check("预筛决策 AUTO_CLOSE", result.prefilter_decision, "AUTO_CLOSE")
     check("置信度 high", result.confidence, "high")
     check("confidence_score 0.9", result.confidence_score, 0.9)
@@ -129,12 +140,175 @@ def feedback_file_tests():
         check("记录含 event_id/decision", {"event_id", "decision"} <= set(records[0]), True)
 
 
+VERDICT = dict(event_type="恶意脚本执行", risk_level="critical", is_false_positive=False)
+
+
+def feedback_store_tests(tmp: Path):
+    print("== 6. HumanFeedbackStore 读写 ==")
+    path = tmp / "feedback.jsonl"
+    store = HumanFeedbackStore(path=path)
+    check("初始为空", store.count(), 0)
+    check("无记录 → latest 为 None", store.latest("EVENT-001"), None)
+
+    check("合法写入返回 True", store.append("EVENT-001", "confirm", **VERDICT), True)
+    check("非法 decision 被拒", store.append("EVENT-001", "approve"), False)
+    check("缺 event_id 被拒", store.append("", "confirm"), False)
+    check("非法写入未落盘", store.count(), 1)
+
+    store.append("EVENT-001", "reject", note="证据不足，应为误报", **VERDICT)
+    latest = store.latest("EVENT-001")
+    check("latest 取最近一条", latest.decision, "reject")
+    check("latest 保留复核意见", latest.note, "证据不足，应为误报")
+    check("history 累计 2 条", len(store.history("EVENT-001")), 2)
+    check("reject_count", store.reject_count("EVENT-001"), 1)
+    check("带裁决摘要", latest.has_verdict(), True)
+    check("摘要匹配同一结论", latest.matches_verdict(**VERDICT), True)
+    check("摘要不匹配另一结论", latest.matches_verdict("误报", "low", True), False)
+
+
+def dirty_data_tests(tmp: Path):
+    """旧格式（无摘要）与脏数据必须容错，且脏数据不得污染门控。"""
+    print("== 6b. 旧格式与脏数据容错 ==")
+    path = tmp / "dirty.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"event_id": "EVENT-OLD", "decision": "confirm", "note": "旧记录", "timestamp": "2026-08-10T00:00:00Z"}),
+                "{not json}",
+                json.dumps({"event_id": "EVENT-BAD", "decision": "maybe", "note": "非法决定值"}),
+                json.dumps({"event_id": "EVENT-NEW", "decision": "reject", "event_type": "误报", "risk_level": "low", "is_false_positive": True}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    store = HumanFeedbackStore(path=path)
+    check("有效记录计数 2（旧+新）", store.count(), 2)
+    check("坏行未致异常且被跳过", store.latest("EVENT-BAD"), None)
+    old = store.latest("EVENT-OLD")
+    check("旧格式可读", old.decision, "confirm")
+    check("旧格式无摘要 → has_verdict=False", old.has_verdict(), False)
+    check("旧格式摘要恒不匹配（不误配门控）", old.matches_verdict("确认什么", "low", True), False)
+    check("新格式摘要可读", store.latest("EVENT-NEW").matches_verdict("误报", "low", True), True)
+
+
+def readback_integration_tests(tmp: Path):
+    """== 7. HITL 读回闭环（集成）==
+
+    单测覆盖不到的是接线：`review_feedback.jsonl` 过去被 Web 只写不读，人工点下
+    「驳回」对该事件的再次研判毫无影响——面板显示「已人工驳回」，Agent 侧却照旧
+    给出同一结论并标 auto_reviewed。本测试从 `app._triage` 入口出发锁死读回。
+    """
+    print("== 7. 读回闭环（集成）==")
+    import security_agent.ai.triage as triage_mod
+    from security_agent.app import build_app
+
+    captured: dict = {}
+
+    def fake_chat(messages, **kwargs):
+        captured["prompt"] = messages[0]["content"]
+        return None  # 触发规则回退：结论确定可复现，且本测试零网络零成本
+
+    original = triage_mod.ai_chat_json
+    triage_mod.ai_chat_json = fake_chat
+    try:
+        app = build_app()
+        # 临时记忆 + 临时反馈库：断言「写不写记忆」时不能碰真实运行时数据
+        feedback_path = tmp / "it_feedback.jsonl"
+        memory_path = tmp / "it_history.jsonl"
+        app.feedback = HumanFeedbackStore(path=feedback_path)
+        app.memory = MemoryStore(path=memory_path)
+        event = app.intake_service.get_event("EVENT-003")
+
+        # ① 无人复核：常规门控，不得出现 human_* 状态
+        baseline = app._triage(event)
+        check("无反馈 → review_status 非人工态",
+              baseline.review_status in ("auto_reviewed", "pending_review"), True)
+        check("无反馈 → human_feedback 为空", baseline.human_feedback, {})
+        check("首次研判写入记忆", app.memory.count(), 1)
+        memory_after_first = app.memory.count()
+
+        verdict = dict(
+            event_type=baseline.event_type,
+            risk_level=baseline.risk_level,
+            is_false_positive=baseline.is_false_positive,
+        )
+
+        # ② 人工确认该裁决 → human_confirmed 并解除复核挂起
+        app.feedback.append(event.id, "confirm", note="采纳", **verdict)
+        app._triage(event)  # 记忆会再写一条（无驳回），先只关心状态
+        result_confirm = app._triage(event)
+        check("确认后 → human_confirmed", result_confirm.review_status, "human_confirmed")
+        check("确认后 → 解除复核挂起", result_confirm.needs_human_review, False)
+        # 用 .get 而非下标：读回一旦失效，这里必须**报 FAIL**而不是抛 KeyError
+        # 把剩余断言整段跳过（变异验证时这个问题掩盖了 4 条本该失败的断言）。
+        check("确认后 → human_feedback 透出 decision", result_confirm.human_feedback.get("decision"), "confirm")
+
+        # ③ 人工驳回同一裁决 → human_rejected + 强制挂起
+        app.feedback.append(event.id, "reject", note="结论有误", **verdict)
+        result_reject = app._triage(event)
+        check("驳回同一结论 → human_rejected", result_reject.review_status, "human_rejected")
+        check("驳回同一结论 → 强制挂起待仲裁", result_reject.needs_human_review, True)
+        check("驳回理由写入 reasoning",
+              any("重复了被否定的裁决" in item for item in result_reject.reasoning_summary), True)
+        check("被驳回 → 本次裁决不写入误报记忆（污染防线）",
+              app.memory.count(), memory_after_first + 2)
+        check("驳回说明写入 reasoning（不写记忆的原因）",
+              any("未写入误报记忆" in item for item in result_reject.reasoning_summary), True)
+
+        # ④ 反馈已注入提示词（"人说了什么"必须真的进到模型输入）
+        prompt = captured.get("prompt", "")
+        check("提示词含人工复核反馈章节", "人工复核反馈" in prompt, True)
+        check("提示词含驳回动作", "驳回该裁决" in prompt, True)
+        check("提示词含复核意见", "结论有误" in prompt, True)
+
+        # ⑤ 摘要不匹配（人复核的是另一版结论）→ 不套用上次结论的状态
+        app.feedback.append(event.id, "confirm", note=",", event_type="误报", risk_level="low", is_false_positive=True)
+        result_other = app._triage(event)
+        check("摘要不符 → 状态回落为 Agent 自判",
+              result_other.review_status in ("auto_reviewed", "pending_review", "human_confirmed"), True)
+        check("摘要不符 → 不等于 human_rejected", result_other.review_status, "pending_review")
+    finally:
+        triage_mod.ai_chat_json = original
+
+
+def sandbox_isolation_tests():
+    """== 8. 评测沙箱对 feedback 的读隔离 ==
+
+    同 memory：本机运营产生的 `review_feedback.jsonl` 属生产数据。若评测期仍被
+    读取，「同一份代码」会因机器复盘历史不同而给出不同数字，冻结集成绩不可复现。
+    """
+    print("== 8. 评测沙箱读隔离（feedback）==")
+    from security_agent.app import build_app
+
+    app = build_app()
+    real_path = app.feedback.path
+    before_bytes = real_path.read_bytes() if real_path.exists() else b""
+    before_count = app.feedback.count()
+    with app.evaluation_sandbox():
+        check("沙箱内 feedback 指向临时库", app.feedback.count(), 0)
+        check("沙箱内读不到真实反馈", app.feedback.latest("EVENT-002"), None)
+    check("沙箱外恢复真实 feedback 库", app.feedback.count(), before_count)
+    # 真实库字节级未变动（沙箱内的一切读写都不得落到生产数据文件）
+    check(
+        "真实 review_feedback.jsonl 字节未变动",
+        (real_path.read_bytes() if real_path.exists() else b"") == before_bytes,
+        True,
+    )
+
+
 def main() -> int:
     mapping_tests()
     normalize_tests()
     ticket_gate_tests()
     e2e_tests()
     feedback_file_tests()
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        feedback_store_tests(tmp)
+        dirty_data_tests(tmp)
+        readback_integration_tests(tmp)
+    sandbox_isolation_tests()
     print(f"\n=== {PASS} passed, {FAIL} failed ===")
     return 1 if FAIL else 0
 

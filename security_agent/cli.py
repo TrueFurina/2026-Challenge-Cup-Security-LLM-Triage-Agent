@@ -25,20 +25,22 @@ def cmd_analyze(event_id: str) -> int:
 
 
 def cmd_coordinate(event_id: str) -> int:
-    """阶段 3：多 Agent 顺序协作（Triage → Hunt → Respond → Report）。"""
+    """阶段 3：多 Agent 顺序协作（Planner → Classifier → Triage → Reviewer）。"""
     app = build_app()
     report = app.coordinate_event(event_id)
     print(f"=== 多 Agent 协作链路（{event_id}） ===")
     for record in report["agent_records"]:
         status = "⚠️ 降级" if record["error"] else "✅"
         print(f"\n[{status}] {record['name']}（{record['role']}） {record['duration_ms']}ms")
+        if record.get("focus"):
+            print(f"  重点: {record['focus']}")
         if record["used_tools"]:
             print(f"  工具: {', '.join(record['used_tools'])}")
         for finding in record["findings"]:
             print(f"  - {finding}")
-    print(f"\n=== 最终报告 ===")
-    final = report["final_report"]
-    for key in ("event_id", "event_type", "risk_level", "confidence", "is_false_positive", "verdict"):
+    final = report["context"].get("reviewer", {}).get("final_decision", {})
+    print(f"\n=== 最终裁决（Reviewer Agent）===")
+    for key in ("event_type", "risk_level", "confidence", "is_false_positive", "verdict", "review_status"):
         if key in final:
             print(f"  {key}: {final[key]}")
     print(f"\n总耗时: {report['total_duration_ms']}ms | 全部 Agent 正常: {report['agents_ok']}")
@@ -132,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_parser.set_defaults(handler=lambda args: cmd_analyze(args.event_id))
 
     coordinate_parser = subparsers.add_parser(
-        "coordinate", help="多 Agent 顺序协作（Triage → Hunt → Respond → Report）"
+        "coordinate", help="多 Agent 顺序协作（Planner → Classifier → Triage → Reviewer）"
     )
     coordinate_parser.add_argument("--event-id", required=True, help="安全事件 ID")
     coordinate_parser.set_defaults(handler=lambda args: cmd_coordinate(args.event_id))

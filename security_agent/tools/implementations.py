@@ -2,6 +2,7 @@ import subprocess
 from datetime import datetime
 
 from security_agent.agent.models import ToolObservation
+from security_agent.textmatch import keyword_hit
 from security_agent.tools.base import Tool
 
 
@@ -37,7 +38,7 @@ class LogLookupTool(Tool):
     def run(self, **kwargs):
         event = kwargs["event"]
         knowledge_hub = kwargs["knowledge_hub"]
-        logs = knowledge_hub.find_logs(event.host, event.user)[:3]
+        logs = knowledge_hub.find_logs(event.host, event.user, getattr(event, "id", ""))[:3]
         details = [f"{item.timestamp} {item.message}" for item in logs]
         return ToolObservation(
             tool_name=self.name,
@@ -67,12 +68,29 @@ class HistoryAlertLookupTool(Tool):
     def run(self, **kwargs):
         event = kwargs["event"]
         knowledge_hub = kwargs["knowledge_hub"]
-        records = knowledge_hub.find_history_alerts(event.host, event.user)[:3]
-        details = [
-            f"{item.timestamp} {item.title} | 风险: {item.risk_level} | 结论: {item.verdict}"
-            for item in records
-        ]
-        summary = f"返回 {len(details)} 条历史告警记录" if details else "未检索到历史告警记录"
+        matches = knowledge_hub.find_history_alerts(event.host, event.user)[:3]
+        # 来源必须随记录一并呈现：不给来源主机时，模型会把异主机历史当成本机行为画像
+        # （实测 EVENT-006/022/033 曾仅凭账号 www-data 同名拿到异主机的
+        # 「疑似 C2 信标 / high」记录，且无从辨别来源）。
+        details = []
+        for match in matches:
+            item = match.record
+            if match.relation == "same_host":
+                origin = f"同主机 {item.host}"
+            else:
+                origin = f"异主机 {item.host} · 仅账号 {item.user} 同名（弱关联，仅供参考）"
+            details.append(
+                f"[{origin}] {item.timestamp} {item.title} | "
+                f"风险: {item.risk_level} | 结论: {item.verdict}"
+            )
+        if not details:
+            summary = "未检索到历史告警记录"
+        else:
+            same_host = sum(1 for m in matches if m.relation == "same_host")
+            summary = (
+                f"返回 {len(details)} 条历史告警记录"
+                f"（同主机 {same_host} 条，异主机账号同名 {len(details) - same_host} 条）"
+            )
         return ToolObservation(tool_name=self.name, summary=summary, details=details)
 
 
@@ -83,22 +101,46 @@ class FalsePositiveCheckTool(Tool):
         event = kwargs["event"]
         asset_observation = kwargs["asset_observation"]
         log_observation = kwargs["log_observation"]
+        # 语料隔离：仅事件自身字段参与关键词匹配。
+        # v1 缺陷：把资产画像与关联日志 details 一并拼入，导致用他机/历史
+        # 上下文判定本次事件（如 DC-01 的基线进程 lsass.exe 让任何事件
+        # 都像"凭据转储"，历史日志里的 maintenance 让攻击看起来像误报）。
         corpus = " ".join(
             [
                 event.process,
                 event.behavior,
                 event.raw_log,
-                " ".join(asset_observation.details),
-                " ".join(log_observation.details),
+                " ".join(getattr(event, "tags", []) or []),
                 event.change_ticket,
             ]
         ).lower()
         matches = []
-        if "baseline" in corpus or "maintenance" in corpus:
+        # 结构化信号：资产维护窗口（解析自资产画像，非文本匹配）
+        if any(
+            detail.startswith("维护窗口:") and "无" not in detail
+            for detail in asset_observation.details
+        ):
+            matches.append("资产存在维护窗口")
+        # 结构化信号：进程属资产基线（正常白名单，仅作减分项）
+        baseline_hit = False
+        for detail in asset_observation.details:
+            if not detail.startswith("基线进程:"):
+                continue
+            names = [n.strip().lower() for n in detail.split(":", 1)[1].split(",")]
+            baseline_hit = str(event.process).lower() in names
+            break
+        routine_words = ("例行", "维护", "maintenance", "backup", "备份",
+                         "同步", "sync", "scan", "扫描", "routine", "批量")
+        if baseline_hit and any(keyword_hit(corpus, w) for w in routine_words):
+            matches.append("进程属资产基线且行为为例行操作")
+        # 否定语境护栏：'source workstation not in admin group baseline' 这类
+        # 否定表述曾被当作「基线内行为」，据此生成误报线索，把已确认的管理共享
+        # 访问从 high 压到 medium（实测 H-09）。否定句不构成误报线索。
+        if any(keyword_hit(corpus, k) for k in ("baseline", "maintenance", "例行")):
             matches.append("命中基线或维护窗口特征")
         if event.change_ticket:
             matches.append(f"存在变更单: {event.change_ticket}")
-        if "whitelist" in corpus:
+        if any(keyword_hit(corpus, k) for k in ("whitelist", "白名单")):
             matches.append("命中白名单特征")
 
         summary = "发现误报线索，需要结合人工确认" if matches else "未发现明确误报线索"

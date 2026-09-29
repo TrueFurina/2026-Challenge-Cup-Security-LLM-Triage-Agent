@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 
+from security_agent.ai import client as llm_client
+
 
 @dataclass
 class EvaluationCase:
@@ -12,6 +14,9 @@ class EvaluationCase:
     expected_false_positive: bool
     expected_event_type: str
     category: str
+    # 垂类场景标签：用于按场景分组统计（命题书要求覆盖渗透测试/应急响应/漏洞挖掘/逆向分析多场景，
+    # 分场景指标是「通用性」的取证依据）。旧用例无此字段时回落到默认场景。
+    scenario: str = "应急响应·威胁研判"
 
 
 class EvaluationService:
@@ -37,6 +42,18 @@ class EvaluationService:
         return cls(cases=[EvaluationCase(**row) for row in rows])
 
     def evaluate(self, app) -> dict:
+        """执行全量评测。
+
+        评测全程运行在 `SecurityAgent.evaluation_sandbox()` 内：研判记忆**读写双向隔离**。
+        不隔离会让同一份代码跑出不同数字——写入让上轮裁决经同主机检索回注提示词
+        （自己污染自己，EVENT-013 曾被同主机 EVENT-001 的历史裁决带错），
+        读取让任何存量记忆影响本轮结果。隔离实现由 Agent 侧单一持有，
+        评测入口与离线评测脚本共用，避免两处漂移。
+        """
+        with app.evaluation_sandbox():
+            return self._evaluate_inner(app)
+
+    def _evaluate_inner(self, app) -> dict:
         case_results = []
         total_duration_ms = 0.0
         risk_hits = 0
@@ -44,6 +61,7 @@ class EvaluationService:
         event_type_hits = 0
         completeness_total = 0.0
         prefilter_snapshot = dict(getattr(app, "prefilter_stats", {}))
+        llm_snapshot = llm_client.get_usage_stats()
 
         for case in self._cases:
             started = perf_counter()
@@ -111,7 +129,8 @@ class EvaluationService:
             "pass_rate": round(passed_cases / total_cases, 3) if total_cases else 0.0,
             "prefilter": self._prefilter_stats(app, prefilter_snapshot),
             "false_positive_closure_rate": self._fp_closure_rate(case_results),
-            "cost_estimate": self._cost_estimate(app, prefilter_snapshot),
+            "cost_estimate": self._cost_estimate(llm_snapshot),
+            "llm_usage": self._llm_usage_delta(llm_snapshot),
             "confidence_calibration": self._confidence_calibration(case_results),
         }
         return {
@@ -187,7 +206,11 @@ class EvaluationService:
                 "event_type_accuracy": s["event_type_accuracy"],
                 "avg_duration_ms": s["avg_duration_ms"],
                 "cost_estimate": s.get("cost_estimate", 0.0),
-                "llm_calls": s.get("prefilter", {}).get("need_llm", 0),
+                # LLM 实际请求次数（实测计数）；无该字段时回退到预筛 NEED_LLM 计数
+                "llm_calls": (s.get("llm_usage") or {}).get(
+                    "requests", s.get("prefilter", {}).get("need_llm", 0)
+                ),
+                "llm_usage": s.get("llm_usage", {}),
                 "confusion": {"tp": tp, "fn": fn, "fp": fp, "tn": tn},
             }
         return rows
@@ -206,12 +229,32 @@ class EvaluationService:
         return round(closed / len(expected_fp), 3)
 
     @staticmethod
-    def _cost_estimate(app, snapshot: dict) -> float:
-        """成本估算：按 LLM 深度研判调用次数近似（元，演示级）。"""
-        current = dict(getattr(app, "prefilter_stats", {}))
-        need_llm = current.get("need_llm", 0) - snapshot.get("need_llm", 0)
-        cost_per_call = 0.001  # 演示级近似：单次 LLM 研判约 0.001 元（真实按 token 计费）
-        return round(need_llm * cost_per_call, 4)
+    def _cost_estimate(llm_snapshot: dict) -> float:
+        """成本估算（元）：基于本轮**实测** token 用量 × 可配置单价假设。
+
+        token 数取自 LLM 响应的 usage 字段真实累计（见 security_agent.ai.client
+        的用量计量），不再是「调用次数 × 固定金额」的硬编码近似——后者会让报告中
+        的成本数字与真实开销脱钩。单价为显式假设，可用环境变量
+        SECURITY_AGENT_PROMPT_PRICE_PER_M / SECURITY_AGENT_COMPLETION_PRICE_PER_M
+        （元/百万 token）覆盖。无 LLM 调用时返回 0.0。
+        """
+        return llm_client.estimate_cost_yuan(EvaluationService._llm_usage_delta(llm_snapshot))
+
+    @staticmethod
+    def _llm_usage_delta(snapshot: dict) -> dict:
+        """本轮评测相对快照的 LLM 用量增量（实测计数，供报告与成本口径使用）。"""
+        current = llm_client.get_usage_stats()
+        return {
+            key: current.get(key, 0) - snapshot.get(key, 0)
+            for key in (
+                "requests",
+                "failed_requests",
+                "prompt_tokens",
+                "completion_tokens",
+                "reasoning_tokens",
+                "truncated_responses",
+            )
+        }
 
     @staticmethod
     def _confidence_calibration(case_results: list[dict]) -> dict:

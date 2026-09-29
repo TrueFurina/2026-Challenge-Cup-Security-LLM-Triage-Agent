@@ -1,6 +1,6 @@
 # 项目架构
 
-> **版本**：v3.0（2026-08-10，全部阶段 1-9 已完成，目标架构已实现）
+> **版本**：v3.1（2026-09-01，四角色多智能体重构 + 评测集扩展至 32 例 + 规则引擎风险评分修正）
 
 ## 架构概览
 
@@ -29,7 +29,7 @@
 ┌──────────────────────────────────────────────────────────────┐
 │ ③ 智能体编排模块                                              │
 │    SecurityAgent._triage()                                   │
-│    ├─ build_plan() 动态生成研判计划                           │
+│    ├─ PlannerAgent 基于事件特征生成研判计划                     │
 │    ├─ 调用 5 项上下文工具（资产/日志/情报/历史/误报）           │
 │    ├─ ★ LLM 深度研判：ai.triage.triage_event()                │
 │    │    ├─ 置信度门控 ★阶段2 (low→待人工复核)                  │
@@ -39,12 +39,13 @@
 └──────────────────────────────────────────────────────────────┘
                               ↓
 ┌──────────────────────────────────────────────────────────────┐
-│ ④ 多 Agent 协作层 ★阶段3                                     │
-│    AgentCoordinator                                          │
-│    ├─ TriageAgent   : 初判（复用 LLM 研判）                   │
-│    ├─ HuntAgent     : 威胁狩猎（ioc_search 工具）             │
-│    ├─ RespondAgent  : 处置建议（预案/工单/隔离）               │
-│    └─ ReportAgent   : 汇总报告                                 │
+│ ④ 多 Agent 协作层 ★阶段3（真实四角色顺序闭环）                 │
+│    AgentCoordinator（串行，数据沿共享 context 流动）            │
+│    ├─ PlannerAgent  : 研判规划与场景识别（特征驱动生成计划）    │
+│    ├─ ClassifierAgent: 确定性预筛分类（复用 PreFilterEngine）  │
+│    │    └─ AUTO_CLOSE/AUTO_ESCALATE → skip_triage 短路        │
+│    ├─ TriageAgent   : 深度研判（复用 LLM 研判，失败开放）      │
+│    └─ ReviewerAgent : 一致性复核 + 处置门控（HITL）            │
 │    每 Agent 独立可测、失败降级不中断                            │
 └──────────────────────────────────────────────────────────────┘
                               ↓
@@ -123,7 +124,7 @@
    ▼
 ┌─────────────────────────────────────────────┐
 │ ③ 多Agent协作层                              │ ✅ 阶段3
-│    Triage ──→ Hunt ──→ Respond ──→ Report   │
+│    Planner→Classifier→Triage→Reviewer        │
 │    任一步失败 → 降级不中断                     │
 └─────────────────────────────────────────────┘
    │
@@ -145,14 +146,14 @@
 
 ## 分阶段 Agent（多 Agent 协作层）
 
-阶段 3 起升级为真正多 Agent 顺序协作（非仅展示层）：
+阶段 3 起升级为真正多 Agent 顺序协作（非仅展示层），2026-09-01 重构为四角色真实闭环：
 
 | Agent | 职责 | 使用工具 |
 |-------|------|---------|
-| **TriageAgent** | 事件分类、风险定级、误报剔除 | asset/log/intel/history/fp_check + LLM 研判 |
-| **HuntAgent** | 威胁狩猎、情报关联 | ioc_search, intel_lookup |
-| **RespondAgent** | 处置建议 | playbook, ticket, isolation |
-| **ReportAgent** | 汇总报告 | — |
+| **PlannerAgent** | 研判规划与场景识别（基于进程/行为/外联/变更单/攻击特征真实决策分析步骤） | asset_lookup, log_lookup, intel_lookup |
+| **ClassifierAgent** | 确定性预筛分类（复用 PreFilterEngine，高置信误报/攻击直接短路 skip_triage） | asset_lookup, log_lookup, intel_lookup, false_positive_check |
+| **TriageAgent** | 深度研判：事件分类、风险定级、误报剔除（复用 LLM 研判，失败开放） | asset/log/intel/history/fp_check + LLM |
+| **ReviewerAgent** | 一致性复核 + 处置门控（低置信/矛盾标记人工复核，预筛确定性结论直接采纳） | — |
 
 ## 主要数据流
 
@@ -184,7 +185,7 @@
 |------|------|------|
 | 1 | 确定性预筛（三态分流） | `_prefilter_test.py` 25/25 |
 | 2 | 置信度门控 + HITL | `_hittl_test.py` 23/23 |
-| 3 | 多 Agent 协作 | `_agents_test.py` 22/22 |
+| 3 | 多 Agent 协作 | `_agents_test.py` 24/24 |
 | 4 | RAG 知识库增强 | `_knowledge_test.py` 16/16 |
 | 5 | 评测体系（三模式对比/报告导出） | `_eval_test.py` 28/28 |
 | 6 | 误报记忆与持续学习 | `_memory_test.py` 15/15 |

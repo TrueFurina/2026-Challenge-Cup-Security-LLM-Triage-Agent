@@ -2,17 +2,18 @@
 
 用法: python scripts/_ledger_test.py
 验证：
-1. 研判后 data/ledger/{event_id}.json 生成
+1. 研判后 ledger JSON 生成（**写入临时目录，不触碰真实 data/ledger**）
 2. ledger 含 steps 数组（context/prefilter/triage/postprocess/llm）与 final_verdict
 3. 工具观测被记录
 4. LLM 调用回调记录 prompt/response（通过 ai_chat on_llm_call）
 5. fail-open：ledger 目录不可写时主流程不崩溃
 6. Web /ledger 与 /api/ledger 路由可响应
+
+隔离说明：本测试全部 ledger 读写均落在 `tempfile.TemporaryDirectory()` 内，
+真实 `security_agent/data/ledger/`（审计证据）永不被写入或删除。
 """
 import json
 import os
-import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -59,7 +60,7 @@ def store_unit_tests(tmp: Path):
     check("list_event_ids 含事件", "EVENT-TEST" in store.list_event_ids(), True)
 
 
-def e2e_tests():
+def e2e_tests(ledger_root: Path):
     print("== 2. 端到端：研判生成 ledger ==")
     from security_agent.app import build_app
     from security_agent.llm.mock import MockLLM
@@ -67,12 +68,11 @@ def e2e_tests():
 
     app = build_app()
     app.llm = MockLLM()
-    app.ledger = LedgerStore()  # 写真实 data/ledger
-
-    # 清理旧记录，保证测试独立
-    ledger_dir = Path(PROJECT_DIR) / "security_agent" / "data" / "ledger"
-    if ledger_dir.exists():
-        shutil.rmtree(ledger_dir)
+    app.record_history = False  # 禁写真实记忆（本测试只关心 ledger）
+    # 隔离到临时 root，**绝不触碰真实 data/ledger**：
+    # 此前本测试为"保证独立"直接 shutil.rmtree 真实 data/ledger，
+    # 会把审计轨迹证据一并抹掉（ledger 正是本作品的审计卖点），属自毁证据。
+    app.ledger = LedgerStore(root=ledger_root)
 
     result = app.triage_event("EVENT-001")
     ledger = app.ledger.load("EVENT-001")
@@ -124,28 +124,22 @@ def failopen_tests(tmp: Path):
     check("写入失败不抛异常", True, True)
 
 
-def web_route_tests():
+def web_route_tests(ledger_root: Path):
     print("== 5. Web 路由 ==")
-    import threading
-    import time
-
-    from security_agent.web.server import run_server
-
-    # 先确保有 ledger 数据（端到端已生成）
     from security_agent.ledger import LedgerStore
 
-    if LedgerStore().load("EVENT-001") is None:
+    # 复用端到端测试写入的**临时** ledger（不再依赖真实目录，故无副作用）
+    store = LedgerStore(root=ledger_root)
+    if store.load("EVENT-001") is None:
         check("跳过：无 ledger 数据", True, True)
         return
 
-    # 用内存方式直接测 handler 渲染函数（避免起真实端口）
-    from security_agent.web.server import SecurityAgentHandler, _page
+    # 验证 Web 侧可导入并加载 ledger JSON（不起真实端口）
+    from security_agent.web.server import SecurityAgentHandler, _page  # noqa: F401
 
-    # 简单验证：直接构造 query 调渲染方法
-    handler = SecurityAgentHandler  # 仅引用类，验证可导入
-    store = LedgerStore()
     ledger = store.load("EVENT-001")
     check("ledger JSON 可被 Web 加载", ledger is not None, True)
+    check("Web handler 可导入", SecurityAgentHandler is not None, True)
 
 
 def main() -> int:
@@ -153,9 +147,12 @@ def main() -> int:
         tmp = Path(td)
         store_unit_tests(tmp)
         failopen_tests(tmp)
-    e2e_tests()
+        # e2e / web 复用同一临时 ledger root：全测试零副作用，
+        # 真实 data/ledger（审计证据）在任何情况下都不被触碰。
+        ledger_root = tmp / "ledger"
+        e2e_tests(ledger_root)
+        web_route_tests(ledger_root)
     llm_callback_tests()
-    web_route_tests()
     print(f"\n=== {PASS} passed, {FAIL} failed ===")
     return 1 if FAIL else 0
 

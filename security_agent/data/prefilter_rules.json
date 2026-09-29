@@ -1,11 +1,13 @@
 {
   "version": 1,
-  "description": "确定性预筛规则集（阶段 1）：攻击规则优先于误报规则，安全优先。支持用户编辑，修改后重启生效。",
+  "description": "确定性预筛规则集（阶段 1）：攻击规则优先于误报规则，安全优先。支持用户编辑，修改后重启生效。weight 为必填项：缺省会导致所有规则回落同一默认值而失去区分度（曾因缺省令投递类规则压过勒索/凭据转储）。stage 约定：execution（执行阶段，如脚本解释器已运行）权重高于 delivery（投递阶段，如邮件拦截/附件未执行），以保证「已执行」事件归入脚本执行。",
   "attack_rules": [
     {
       "id": "ATK-PS-ENCODED",
-      "description": "PowerShell 编码命令下载执行",
-      "keywords": ["encodedcommand", "downloadstring", "invoke-expression"],
+      "description": "脚本解释器执行（编码命令下载执行 / Unix 反弹 shell，执行阶段）",
+      "keywords": ["encodedcommand", "downloadstring", "invoke-expression", "/dev/tcp/", "reverse shell", "反弹 shell", "bash -i"],
+      "weight": 3.5,
+      "stage": "execution",
       "risk_level": "critical",
       "event_type": "恶意脚本执行"
     },
@@ -13,6 +15,7 @@
       "id": "ATK-WEBSHELL",
       "description": "WebShell 上传/访问",
       "keywords": ["shell.jsp", "webshell", "cmd=whoami", "eval("],
+      "weight": 3.5,
       "risk_level": "critical",
       "event_type": "WebShell 攻击"
     },
@@ -20,27 +23,50 @@
       "id": "ATK-RANSOM",
       "description": "勒索加密活动",
       "keywords": [".encrypted", "encrypt", "ransomware"],
+      "weight": 3.0,
       "risk_level": "critical",
       "event_type": "勒索软件加密"
     },
     {
       "id": "ATK-MACRO",
-      "description": "恶意宏/载荷投递",
+      "description": "恶意宏/载荷投递（投递阶段）",
       "keywords": ["macro", "docm", "exploit payload"],
+      "weight": 2.5,
+      "stage": "delivery",
       "risk_level": "high",
       "event_type": "恶意载荷投递"
     },
     {
-      "id": "ATK-CRED-DUMP",
-      "description": "凭据转储/枚举",
-      "keywords": ["enumeratecredentials", "mimikatz", "lsass", "minidump", "cred.dll"],
+      "id": "ATK-OFFICE-MACRO",
+      "description": "办公文档载荷投递（投递阶段：文档/附件携带宏载荷；已实际执行脚本时由执行阶段规则胜出）",
+      "keywords": ["winword", "docm", "ole_object", "macro-download", "宏文档", "宏附件"],
+      "weight": 3.0,
+      "stage": "delivery",
       "risk_level": "high",
+      "event_type": "恶意载荷投递"
+    },
+    {
+      "id": "ATK-WEB-EXPLOIT",
+      "description": "Web 漏洞利用（注入/反序列化/目录穿越/文件上传等服务端利用；与扫描探测类特征刻意区分——扫描本身不是攻击）",
+      "keywords": ["sql injection", "union select", "sqli", "path traversal", "deserialization", "反序列化", "命令注入", "command injection"],
+      "weight": 3.2,
+      "stage": "execution",
+      "risk_level": "high",
+      "event_type": "Web 漏洞利用"
+    },
+    {
+      "id": "ATK-CRED-DUMP",
+      "description": "凭据转储/枚举（凭据一旦转储即需全域轮换，属不可逆损害 → critical）",
+      "keywords": ["enumeratecredentials", "mimikatz", "lsass", "minidump", "cred.dll"],
+      "weight": 3.0,
+      "risk_level": "critical",
       "event_type": "凭据转储"
     },
     {
       "id": "ATK-LATERAL",
       "description": "横向移动/管理共享访问",
       "keywords": ["admin$", "share=admin", "net.exe"],
+      "weight": 2.5,
       "risk_level": "high",
       "event_type": "横向移动前置"
     },
@@ -48,6 +74,7 @@
       "id": "ATK-C2-INTEL",
       "description": "已知恶意情报命中（C2/信标）",
       "type": "intel_malicious",
+      "weight": 2.5,
       "risk_level": "high",
       "event_type": "已知 C2 情报命中"
     }

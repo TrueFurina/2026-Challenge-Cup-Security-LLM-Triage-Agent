@@ -1,11 +1,11 @@
-"""阶段 3 多 Agent 协作测试。
+"""阶段 3 多 Agent 协作测试（四角色决策闭环）。
 
 用法: python scripts/_agents_test.py
 验证：
-1. 每个 Agent 独立可跑（TriageAgent / HuntAgent / RespondAgent / ReportAgent）
-2. coordinator 全链路：Triage → Hunt → Respond → Report 数据流清晰
-3. 失败降级：mock 一个 Agent 抛异常，链路不中断
-4. CLI coordinate 命令可用
+1. 每个 Agent 独立可跑（Planner / Classifier / Triage / Reviewer）
+2. coordinator 全链路：Planner → Classifier → Triage → Reviewer 数据流清晰
+3. 失败降级：mock 一个 Agent 抛异常，链路不中断且 Reviewer 仍产出裁决
+4. CLI coordinate 命令可用且展示四角色
 """
 import os
 import sys
@@ -16,7 +16,12 @@ os.chdir(PROJECT_DIR)
 
 from security_agent.agents.base import AgentInput, BaseAgent  # noqa: E402
 from security_agent.agents.coordinator import AgentCoordinator  # noqa: E402
-from security_agent.agents.impl import HuntAgent, ReportAgent, RespondAgent, TriageAgent  # noqa: E402
+from security_agent.agents.impl import (  # noqa: E402
+    ClassifierAgent,
+    PlannerAgent,
+    ReviewerAgent,
+    TriageAgent,
+)
 
 PASS = 0
 FAIL = 0
@@ -31,89 +36,86 @@ def check(name: str, actual, expected):
     FAIL += int(not ok)
 
 
-def build_context(app):
-    """构建与 coordinate_event 相同的工具观测上下文。"""
-    event = app.intake_service.get_event("EVENT-001")
+def build_context(app, event_id="EVENT-001"):
+    """构建与 _triage 相同的工具观测上下文。"""
+    event = app.intake_service.get_event(event_id)
     knowledge_items, _ = app.knowledge_hub.retrieve_knowledge(event)
-    context = {
-        "knowledge_hub": app.knowledge_hub,
-        "tool_registry": app.tool_registry,
-    }
-    asset_tool = app.tool_registry.get("asset_lookup")
-    log_tool = app.tool_registry.get("log_lookup")
-    intel_tool = app.tool_registry.get("intel_lookup")
-    history_tool = app.tool_registry.get("history_alert_lookup")
-    fp_tool = app.tool_registry.get("false_positive_check")
-    context["asset_observation"] = asset_tool.run(event=event, knowledge_hub=app.knowledge_hub)
-    context["log_observation"] = log_tool.run(event=event, knowledge_hub=app.knowledge_hub)
-    context["intel_observation"] = intel_tool.run(event=event, knowledge_hub=app.knowledge_hub)
-    context["history_observation"] = history_tool.run(event=event, knowledge_hub=app.knowledge_hub)
-    context["false_positive_observation"] = fp_tool.run(
-        event=event,
-        knowledge_hub=app.knowledge_hub,
-        asset_observation=context["asset_observation"],
-        log_observation=context["log_observation"],
+    kh = app.knowledge_hub
+    ao = app.tool_registry.get("asset_lookup").run(event=event, knowledge_hub=kh)
+    lo = app.tool_registry.get("log_lookup").run(event=event, knowledge_hub=kh)
+    io = app.tool_registry.get("intel_lookup").run(event=event, knowledge_hub=kh)
+    ho = app.tool_registry.get("history_alert_lookup").run(event=event, knowledge_hub=kh)
+    fo = app.tool_registry.get("false_positive_check").run(
+        event=event, knowledge_hub=kh, asset_observation=ao, log_observation=lo
     )
-    context["playbook_matcher"] = app.tool_registry.get("playbook_matcher")
-    context["ticket_generator"] = app.tool_registry.get("ticket_generator")
-    context["host_isolation_simulator"] = app.tool_registry.get("host_isolation_simulator")
-    context["ioc_search"] = app.tool_registry.get("ioc_search")
+    pf = app.prefilter_engine.prefilter(
+        event=event, asset_observation=ao, intel_observation=io,
+        false_positive_observation=fo, log_observation=lo, history_observation=ho,
+    )
+    context = {
+        "knowledge_hub": kh,
+        "tool_registry": app.tool_registry,
+        "asset_observation": ao,
+        "log_observation": lo,
+        "intel_observation": io,
+        "history_observation": ho,
+        "false_positive_observation": fo,
+        "tool_observations": [ao, lo, io, ho, fo],
+        "prefilter_result": pf,
+        "force_rule_fallback": False,
+    }
     return event, knowledge_items, context
 
 
 def single_agent_tests(app):
     print("== 1. 每个 Agent 独立可跑 ==")
     event, knowledge_items, context = build_context(app)
-    plan = ["Monitor Agent 接收安全事件", "Context Agent 关联上下文", "Triage Agent 初步研判", "Report Agent 输出结论"]
 
-    ai = AgentInput(event=event, context=context, knowledge_items=knowledge_items, plan=plan, llm=app.llm)
-    out = TriageAgent().run(ai)
-    check("TriageAgent 无 error", out.error == "", True)
-    check("TriageAgent 有裁决数据", "risk_level" in out.data, True)
+    # Planner
+    out_p = PlannerAgent().run(AgentInput(event=event, context=context, knowledge_items=knowledge_items, plan=[], llm=app.llm))
+    check("PlannerAgent 无 error", out_p.error == "", True)
+    check("PlannerAgent 产出 plan 列表", isinstance(out_p.data.get("plan"), list) and len(out_p.data["plan"]) > 0, True)
 
-    # 将 Triage 输出注入 context，测 Hunt
-    ctx2 = dict(context)
-    ctx2["triage"] = out.data
-    ai2 = AgentInput(event=event, context=ctx2, knowledge_items=knowledge_items, plan=plan, llm=app.llm)
-    out2 = HuntAgent().run(ai2)
-    check("HuntAgent 无 error", out2.error == "", True)
-    check("HuntAgent 输出狩猎发现", isinstance(out2.data.get("hunt_findings"), list), True)
+    # Classifier（依赖 prefilter_result）
+    ctx_c = dict(context)
+    ctx_c["planner"] = out_p.data
+    out_c = ClassifierAgent().run(AgentInput(event=event, context=ctx_c, knowledge_items=knowledge_items, plan=[], llm=app.llm))
+    check("ClassifierAgent 无 error", out_c.error == "", True)
+    check("ClassifierAgent 产出 decision", bool(out_c.data.get("decision")), True)
 
-    # Respond
-    ctx3 = dict(ctx2)
-    ctx3["hunt"] = out2.data
-    ai3 = AgentInput(event=event, context=ctx3, knowledge_items=knowledge_items, plan=plan, llm=app.llm)
-    out3 = RespondAgent().run(ai3)
-    check("RespondAgent 无 error", out3.error == "", True)
-    check("RespondAgent 输出预案", bool(out3.data.get("playbook")), True)
+    # Triage（依赖 planner plan）
+    ctx_t = dict(ctx_c)
+    ctx_t["classifier"] = out_c.data
+    out_t = TriageAgent().run(AgentInput(event=event, context=ctx_t, knowledge_items=knowledge_items, plan=[], llm=app.llm))
+    check("TriageAgent 无 error", out_t.error == "", True)
+    check("TriageAgent 有裁决数据", "risk_level" in out_t.data, True)
 
-    # Report
-    ctx4 = dict(ctx3)
-    ctx4["respond"] = out3.data
-    ai4 = AgentInput(event=event, context=ctx4, knowledge_items=knowledge_items, plan=plan, llm=app.llm)
-    out4 = ReportAgent().run(ai4)
-    check("ReportAgent 无 error", out4.error == "", True)
-    check("ReportAgent 输出报告", "report" in out4.data, True)
-    check("报告含最终裁决", bool(out4.data["report"].get("verdict")), True)
+    # Reviewer（依赖 classifier + triage）
+    ctx_r = dict(ctx_t)
+    ctx_r["triage"] = out_t.data
+    out_r = ReviewerAgent().run(AgentInput(event=event, context=ctx_r, knowledge_items=knowledge_items, plan=[], llm=app.llm))
+    check("ReviewerAgent 无 error", out_r.error == "", True)
+    check("ReviewerAgent 产出 final_decision", isinstance(out_r.data.get("final_decision"), dict), True)
+    check("final_decision 含 event_type", bool(out_r.data["final_decision"].get("event_type")), True)
+    check("final_decision 含 review_status", bool(out_r.data["final_decision"].get("review_status")), True)
+    # 防回归：final_decision 的 plan 由 Reviewer 从 Planner 产出继承。该行曾在一次
+    # 「并入 HITL 门控」的编辑里被连带删掉，而当时无任何断言覆盖——下令
+    # AnalysisResult.plan_steps 静默变空。此处锁死「Reviewer 必须继承 Planner 的 plan」。
+    check("final_decision 继承 planner plan（非空）",
+          bool(out_r.data["final_decision"].get("plan")), True)
 
 
 def coordinator_tests(app):
     print("== 2. coordinator 全链路 ==")
     event, knowledge_items, context = build_context(app)
-    from security_agent.agent.planner import build_plan
-
-    ai = AgentInput(
-        event=event,
-        context=context,
-        knowledge_items=knowledge_items,
-        plan=build_plan(event),
-        llm=app.llm,
-    )
+    ai = AgentInput(event=event, context=context, knowledge_items=knowledge_items, plan=[], llm=app.llm)
     result = AgentCoordinator().coordinate(ai)
+    names = [r["name"] for r in result["agent_records"]]
     check("4 个 Agent 记录", len(result["agent_records"]), 4)
-    check("链路顺序正确", [r["name"] for r in result["agent_records"]][0], "Triage Agent")
+    check("链路顺序为 Planner→Classifier→Triage→Reviewer", names, ["Planner Agent", "Classifier Agent", "Triage Agent", "Reviewer Agent"])
     check("全部 Agent 正常", result["agents_ok"], True)
-    check("最终报告有事件类型", bool(result["final_report"].get("event_type")), True)
+    final = result["context"].get("reviewer", {}).get("final_decision", {})
+    check("最终裁决含事件类型", bool(final.get("event_type")), True)
     check("总耗时 > 0", result["total_duration_ms"] > 0, True)
 
 
@@ -128,21 +130,13 @@ class _BrokenAgent(BaseAgent):
 def degradation_tests(app):
     print("== 3. 失败降级（fail-open） ==")
     event, knowledge_items, context = build_context(app)
-    from security_agent.agent.planner import build_plan
-
-    ai = AgentInput(
-        event=event,
-        context=context,
-        knowledge_items=knowledge_items,
-        plan=build_plan(event),
-        llm=app.llm,
-    )
-    # 用 BrokenAgent 替换第一个 Agent，验证链路不中断
-    result = AgentCoordinator(agents=[_BrokenAgent(), HuntAgent(), RespondAgent(), ReportAgent()]).coordinate(ai)
-    check("链路不中断（有记录）", len(result["agent_records"]), 4)
+    ai = AgentInput(event=event, context=context, knowledge_items=knowledge_items, plan=[], llm=app.llm)
+    result = AgentCoordinator(agents=[_BrokenAgent(), ClassifierAgent(), TriageAgent(), ReviewerAgent()]).coordinate(ai)
+    check("链路不中断（有 4 记录）", len(result["agent_records"]), 4)
     check("Broken Agent 标记 error", result["agent_records"][0]["error"] != "", True)
-    check("后续 Agent 仍执行", result["agent_records"][1]["name"], "Hunt Agent")
-    check("最终报告仍生成", bool(result["final_report"]), True)
+    check("后续 Agent 仍执行", result["agent_records"][1]["name"], "Classifier Agent")
+    final = result["context"].get("reviewer", {}).get("final_decision", {})
+    check("Reviewer 仍产出最终裁决", bool(final.get("event_type")), True)
 
 
 def cli_tests():
@@ -154,17 +148,16 @@ def cli_tests():
         capture_output=True, text=True, timeout=60, cwd=PROJECT_DIR,
     )
     check("CLI 退出码 0", r.returncode, 0)
-    check("CLI 显示多 Agent 链路", "多 Agent 协作链路" in r.stdout, True)
-    check("CLI 显示 Triage Agent", "Triage Agent" in r.stdout, True)
-    check("CLI 显示最终报告", "最终报告" in r.stdout, True)
+    check("CLI 显示四角色链路", "多 Agent 协作链路" in r.stdout, True)
+    check("CLI 显示 Planner Agent", "Planner Agent" in r.stdout, True)
+    check("CLI 显示 Reviewer Agent", "Reviewer Agent" in r.stdout, True)
+    check("CLI 显示最终裁决", "最终裁决" in r.stdout, True)
 
 
 def main() -> int:
     from security_agent.app import build_app
-    from security_agent.llm.mock import MockLLM
 
     app = build_app()
-    app.llm = MockLLM()  # 强制 Mock，避免真实 API 依赖
 
     single_agent_tests(app)
     coordinator_tests(app)

@@ -7,6 +7,7 @@
 3. 记忆上限：超过 MAX_RECORDS 自动裁剪（保留最近 N 条）
 4. clear：清空返回条数
 5. prompt 注入：_build_user_prompt 含"历史研判记忆"章节
+6. 注入接线（集成）：从 app._triage 入口验证 memory → 提示词的接线真实存在
 """
 import json
 import os
@@ -180,6 +181,62 @@ def prompt_injection_tests():
     check("prompt 含一致性引导", "供一致性参考" in prompt, True)
 
 
+def wiring_integration_tests():
+    """== 6. 注入接线（集成）——memory → orchestrator → 提示词 ==
+
+    为什么单测不够：`prompt_injection_tests` 直接调 `_build_user_prompt(history_items=...)`，
+    参数本身没问题；但生产链路曾**从未**给 `history_items` 传值
+    （`MemoryStore.search` 零调用），于是该功能"只写不读"完全失效，
+    而单测依旧全绿——典型的「函数被覆盖、集成没接上」。
+
+    本测试从 `app._triage` 入口出发、捕获真实提示词，锁死这条接线。
+    """
+    print("== 6. 注入接线（集成）==")
+    import security_agent.ai.triage as triage_mod
+    from security_agent.app import build_app
+
+    captured: dict = {}
+
+    def fake_chat(messages, **kwargs):
+        captured["prompt"] = messages[0]["content"]
+        return None  # 触发规则回退，避免真实 LLM 调用（本测试零成本零网络）
+
+    original = triage_mod.ai_chat_json
+    triage_mod.ai_chat_json = fake_chat
+    try:
+        # 复用评测沙箱：记忆读写双向隔离 + ledger 写隔离。
+        # 此前本测试直接 `app.memory.clear()` 清掉**真实** triage_history.jsonl
+        # （实测 -13KB），且 `_triage` 会把 ledger 写进真实 data/ledger，属测试污染运行时数据。
+        app = build_app()
+        with app.evaluation_sandbox():
+            event = app.intake_service.get_event("EVENT-003")
+
+            app._triage(event)
+            # 若该事件改为确定性预筛短路，就取不到提示词——让测试显式失败而非静默跳过
+            check("EVENT-003 走 LLM 深度研判（提示词已捕获）",
+                  bool(captured.get("prompt")), True)
+            check("空记忆 → 提示词标注「无相似历史研判记忆」",
+                  "- 无相似历史研判记忆" in captured.get("prompt", ""), True)
+
+            app.memory.append({
+                "event_id": "MEM-WIRE-SEED",
+                "host": event.host,
+                "process": event.process,
+                "behavior": event.behavior,
+                "event_type": "误报",
+                "risk_level": "low",
+                "confidence": "high",
+                "is_false_positive": True,
+            })
+            app._triage(event)
+            prompt = captured.get("prompt", "")
+            section = prompt.split("历史研判记忆", 1)[-1][:240]
+            check("同主机历史记忆被检索并注入", event.host in section, True)
+            check("注入内容含历史判定结论", "判定: 误报" in section, True)
+    finally:
+        triage_mod.ai_chat_json = original
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
@@ -188,6 +245,7 @@ def main() -> int:
         limit_tests(tmp)
         clear_tests(tmp)
     prompt_injection_tests()
+    wiring_integration_tests()
     print(f"\n=== {PASS} passed, {FAIL} failed ===")
     return 1 if FAIL else 0
 

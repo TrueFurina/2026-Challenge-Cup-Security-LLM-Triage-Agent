@@ -58,7 +58,7 @@
   {
     "event_id": "EVENT-008",
     "title": "终端设备凭据转储行为",
-    "expected_risk_level": "high",
+    "expected_risk_level": "critical",
     "expected_false_positive": false,
     "expected_event_type": "凭据转储",
     "category": "凭据转储"
@@ -77,6 +77,237 @@
     "expected_risk_level": "high",
     "expected_false_positive": false,
     "expected_event_type": "恶意载荷投递",
-    "category": "恶意载荷投递"
+      "category": "恶意载荷投递"
+    }
+  ,
+  {
+    "event_id": "EVENT-011",
+    "title": "数据库服务器异常数据外传（变更单掩护）",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "数据渗出",
+    "category": "变更单掩护数据渗出"
+  },
+  {
+    "event_id": "EVENT-012",
+    "title": "备份服务器例行加密备份（误报）",
+    "expected_risk_level": "low",
+    "expected_false_positive": true,
+    "expected_event_type": "误报",
+    "category": "例行加密备份"
+  },
+  {
+    "event_id": "EVENT-013",
+    "title": "域控运维例行共享目录核查（误报）",
+    "expected_risk_level": "low",
+    "expected_false_positive": true,
+    "expected_event_type": "误报",
+    "category": "域控运维共享"
+  },
+  {
+    "event_id": "EVENT-014",
+    "title": "可疑进程读取系统凭据内存（变体绕过）",
+    "expected_risk_level": "critical",
+    "expected_false_positive": false,
+    "expected_event_type": "凭据转储",
+    "category": "凭据转储变体"
+  },
+  {
+    "event_id": "EVENT-015",
+    "title": "应用服务器 TLS 业务外联（误报）",
+    "expected_risk_level": "low",
+    "expected_false_positive": true,
+    "expected_event_type": "误报",
+    "category": "TLS业务外联"
+  },
+  {
+    "event_id": "EVENT-016",
+    "title": "邮件网关放行可疑文档（变更单掩护）",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "恶意脚本执行",
+    "category": "变更单宏投递"
+  },
+  {
+    "event_id": "EVENT-017",
+    "title": "授权内网漏洞扫描任务（维护窗口误报）",
+    "expected_risk_level": "low",
+    "expected_false_positive": true,
+    "expected_event_type": "误报",
+    "category": "授权扫描维护"
+  },
+  {
+    "event_id": "EVENT-018",
+    "title": "计划备份任务触发 DLP 告警（例行误报）",
+    "expected_risk_level": "low",
+    "expected_false_positive": true,
+    "expected_event_type": "误报",
+    "category": "例行备份DLP"
+  },
+  {
+    "event_id": "EVENT-019",
+    "title": "白名单补丁批量部署（运维误报）",
+    "expected_risk_level": "low",
+    "expected_false_positive": true,
+    "expected_event_type": "误报",
+    "category": "白名单补丁"
+  },
+  {
+    "event_id": "EVENT-020",
+    "title": "邮件网关拦截钓鱼宏附件",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "恶意载荷投递",
+    "category": "钓鱼宏投递"
+  },
+  {
+    "event_id": "EVENT-021",
+    "title": "终端 PowerShell 编码命令下载执行",
+    "expected_risk_level": "critical",
+    "expected_false_positive": false,
+    "expected_event_type": "恶意脚本执行",
+    "category": "高危脚本执行"
+  },
+  {
+    "event_id": "EVENT-022",
+    "title": "Web 服务器 webshell 写入",
+    "expected_risk_level": "critical",
+    "expected_false_positive": false,
+    "expected_event_type": "WebShell 攻击",
+    "category": "漏洞利用与 WebShell"
+  },
+  {
+    "event_id": "EVENT-023",
+    "title": "主机勒索加密行为",
+    "expected_risk_level": "critical",
+    "expected_false_positive": false,
+    "expected_event_type": "勒索软件加密",
+    "category": "勒索加密"
+  },
+  {
+    "event_id": "EVENT-024",
+    "title": "凭据转储工具 mimikatz 执行",
+    "expected_risk_level": "critical",
+    "expected_false_positive": false,
+    "expected_event_type": "凭据转储",
+    "category": "凭据转储"
+  },
+  {
+    "event_id": "EVENT-025",
+    "title": "恶意宏文档触发脚本下载（已进入执行阶段）",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "恶意脚本执行",
+    "category": "恶意脚本执行"
+  },
+  {
+    "event_id": "EVENT-026",
+    "title": "RDP 暴力破解尝试",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "异常登录",
+    "category": "异常登录"
+  },
+  {
+    "event_id": "EVENT-027",
+    "title": "终端周期性外联 C2 信标",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "异常外联",
+    "category": "异常外联"
+  },
+  {
+    "event_id": "EVENT-028",
+    "title": "psexec 横向移动",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "横向移动前置",
+    "category": "凭证与横向前置"
+  },
+  {
+    "event_id": "EVENT-029",
+    "title": "客户数据批量外传至云存储",
+    "expected_risk_level": "critical",
+    "expected_false_positive": false,
+    "expected_event_type": "数据渗出",
+    "category": "数据渗出"
+  },
+  {
+    "event_id": "EVENT-030",
+    "title": "计划任务派生异常进程（模糊中等）",
+    "expected_risk_level": "medium",
+    "expected_false_positive": false,
+    "expected_event_type": "通用异常行为",
+    "category": "通用异常行为"
+  },
+  {
+    "event_id": "EVENT-031",
+    "title": "白名单基线进程触发 EDR 告警（误报）",
+    "expected_risk_level": "low",
+    "expected_false_positive": true,
+    "expected_event_type": "误报",
+    "category": "白名单基线EDR"
+  },
+  {
+    "event_id": "EVENT-032",
+    "title": "SSH 凭证填充攻击",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "异常登录",
+    "category": "异常登录"
+  },
+  {
+    "event_id": "EVENT-033",
+    "title": "Web 应用 SQL 注入尝试",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "Web 漏洞利用",
+    "category": "SQL 注入",
+    "scenario": "Web 漏洞利用研判"
+  },
+  {
+    "event_id": "EVENT-034",
+    "title": "应用接口反序列化利用",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "Web 漏洞利用",
+    "category": "反序列化",
+    "scenario": "Web 漏洞利用研判"
+  },
+  {
+    "event_id": "EVENT-035",
+    "title": "目录穿越读取站点外文件",
+    "expected_risk_level": "high",
+    "expected_false_positive": false,
+    "expected_event_type": "Web 漏洞利用",
+    "category": "目录穿越",
+    "scenario": "Web 漏洞利用研判"
+  },
+  {
+    "event_id": "EVENT-036",
+    "title": "文件上传接口落地可执行脚本",
+    "expected_risk_level": "critical",
+    "expected_false_positive": false,
+    "expected_event_type": "WebShell 攻击",
+    "category": "文件上传（与 WebShell 的边界：已落地可交互按 WebShell 归类）",
+    "scenario": "Web 漏洞利用研判"
+  },
+  {
+    "event_id": "EVENT-037",
+    "title": "授权渗透测试期间的目标评估",
+    "expected_risk_level": "low",
+    "expected_false_positive": true,
+    "expected_event_type": "误报",
+    "category": "授权测试（白名单+变更单）",
+    "scenario": "Web 漏洞利用研判"
+  },
+  {
+    "event_id": "EVENT-038",
+    "title": "漏洞扫描平台例行巡检",
+    "expected_risk_level": "low",
+    "expected_false_positive": true,
+    "expected_event_type": "误报",
+    "category": "例行漏扫（白名单）",
+    "scenario": "Web 漏洞利用研判"
   }
 ]

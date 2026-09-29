@@ -77,7 +77,14 @@ def mode_comparison_tests(app):
         check(f"{name} 有 cost_estimate", "cost_estimate" in modes[name], True)
     check("纯规则 LLM 调用为 0", modes["rules"]["llm_calls"], 0)
     check("纯规则成本为 0", modes["rules"]["cost_estimate"], 0.0)
-    check("混合模式 LLM 调用 < 10", modes["hybrid"]["llm_calls"] < 10, True)
+    # 混合模式的核心主张：预筛跳过部分 LLM 调用，故实际请求数应少于样本总数，
+    # 且不多于纯 LLM 模式（原断言写死「< 10」是 16 例时代的遗留，样本扩容后会假失败）
+    case_total = len(result["cases"])
+    check("混合模式 LLM 调用少于样本总数（预筛确有跳过）",
+          modes["hybrid"]["llm_calls"] < case_total, True)
+    check("混合模式 LLM 调用不多于纯 LLM 模式",
+          modes["hybrid"]["llm_calls"] <= modes["llm"]["llm_calls"] + 1, True)
+    check("模式对比含实测 token 用量", "llm_usage" in modes["hybrid"], True)
     check("顶层透出 cases", "cases" in result and len(result["cases"]) > 0, True)
 
 
