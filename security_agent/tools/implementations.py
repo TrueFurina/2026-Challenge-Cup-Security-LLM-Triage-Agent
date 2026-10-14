@@ -1,3 +1,4 @@
+import inspect
 import subprocess
 from datetime import datetime
 
@@ -150,12 +151,47 @@ class FalsePositiveCheckTool(Tool):
 class IncidentTriageTool(Tool):
     name = "incident_triage"
 
+    @staticmethod
+    def _adapt_kwargs(kwargs: dict) -> dict:
+        """把调用方入参适配为 `triage_event` 的签名。
+
+        **为什么必须做**：本工具是 `triage_event` 的薄封装，而各调用方入参形态
+        并不统一——MCP 层会附带 `knowledge_hub`（`triage_event` 不接受），
+        生产规则回退分支（`agents/impl.py` 的 `force_rule_fallback` 路径）则
+        未传必需参数 `plan`。原样 `**kwargs` 转发必然 `TypeError`。
+
+        危险之处在于下方 `except Exception` 会 fail-open：把 `TypeError`
+        变成"最简兜底结果"，于是工具返回 `isError=False`、
+        调用方以为研判成功，**实际一步研判都没做**。
+        实测两条路径 100% 触发兜底（2026-10-14），故在此做键过滤 + 必需项补齐。
+        """
+        from security_agent.ai.triage import triage_event
+
+        allowed = set(inspect.signature(triage_event).parameters)
+        adapted = {k: v for k, v in kwargs.items() if k in allowed}
+
+        # knowledge_items 为必需项：MCP 通道只带 knowledge_hub，按事件现场检索补齐
+        if "knowledge_items" not in adapted:
+            hub, event = kwargs.get("knowledge_hub"), kwargs.get("event")
+            items: list = []
+            if hub is not None and event is not None:
+                try:
+                    items = hub.retrieve_knowledge(event)[0]
+                except Exception:  # noqa: BLE001 - 检索失败退化为空知识集
+                    items = []
+            adapted["knowledge_items"] = items
+
+        # plan 为必需项：无 PlannerAgent 上游时（MCP 单次调用 / 规则回退）给空计划，
+        # 由 `_format_plan` 渲染为"无计划"，而不是让整个研判退化成兜底。
+        adapted.setdefault("plan", [])
+        return adapted
+
     def run(self, **kwargs):
         from security_agent.ai.triage import triage_event
 
         try:
             # AI 研判：LLM 决策 + 防御性解析 + 规则引擎回退（fail-open）
-            return triage_event(**kwargs)
+            return triage_event(**self._adapt_kwargs(kwargs))
         except Exception as exc:  # noqa: BLE001 - 保险兜底，保证研判链路永不中断
             event = kwargs["event"]
             observations = [

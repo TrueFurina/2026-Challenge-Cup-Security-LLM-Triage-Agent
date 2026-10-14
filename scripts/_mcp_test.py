@@ -205,6 +205,79 @@ def cli_pipe_tests():
         check("serve-mcp 管道未超时", False, True)
 
 
+def upstream_passthrough_tests():
+    """上游观察结果「回传下游」必须可用（2026-10-14 修复的两处同族缺陷）。
+
+    为什么单列一节：`tools/list` 与单工具调用都只能证明「单个工具能调」，
+    照不出两类问题——
+    (1) 调用方把上游工具输出回传下游时，协议层的 dict → ToolObservation 不还原；
+    (2) fail-open 把入参契约错配伪装成「成功」（返回 isError=False 却一步没做）。
+    只有把链路串起来才暴露，故此处按真实链路断言。
+    """
+    print("== 7. 上游结果回传链路（防契约错配复发）==")
+    server = make_server()
+
+    def call(tool, **args):
+        result = server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {"name": tool, "arguments": args},
+            }
+        )["result"]
+        text = result["content"][0]["text"]
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = text
+        return result.get("isError"), payload, text
+
+    event = {"id": "EVENT-001"}
+    _, asset, _ = call("asset_lookup", event=event)
+    _, logs, _ = call("log_lookup", event=event)
+    _, intel, _ = call("intel_lookup", event=event)
+    _, history, _ = call("history_alert_lookup", event=event)
+
+    # 缺陷 1：上游输出经 MCP 是 dict，而工具按属性读 `.details`。
+    # 不还原即 AttributeError: 'dict' object has no attribute 'details'。
+    err, fp, fp_text = call(
+        "false_positive_check", event=event, asset_observation=asset, log_observation=logs
+    )
+    check("回传 dict observation 不失败", err, False)
+    check("未出现属性访问错误", "has no attribute" in fp_text, False)
+    check("误报剔除返回结构化结论", bool(fp.get("summary")) if isinstance(fp, dict) else False, True)
+
+    # 缺陷 2：incident_triage 是 triage_event 的薄封装，而调用方入参形态不一
+    # （MCP 带 knowledge_hub、不传 plan）。原样 `**kwargs` 转发必 TypeError，
+    # 而 fail-open 会把它降级成「最简兜底结果」——返回 isError=False，
+    # 调用方以为研判成功，实际一步研判都没做。
+    err, triage, _ = call(
+        "incident_triage",
+        event=event,
+        asset_observation=asset,
+        log_observation=logs,
+        intel_observation=intel,
+        history_observation=history,
+        false_positive_observation=fp,
+    )
+    check("研判主入口经 MCP 可调用", err, False)
+    reasoning = " ".join(str(x) for x in (triage.get("reasoning_summary") or []))
+    check("研判未走异常兜底", "研判模块出现异常" in reasoning, False)
+    check(
+        "研判产出合法风险等级",
+        triage.get("risk_level") in {"low", "medium", "high", "critical"},
+        True,
+    )
+    check("研判产出事件类型", bool(triage.get("event_type")), True)
+
+    # 下游：处置编排依赖 incident_triage 的 analysis（dict，走下标访问，本就兼容）
+    err, playbook, _ = call("playbook_matcher", event=event, analysis=triage)
+    check("playbook_matcher 可消费研判结论", err, False)
+    err, ticket, _ = call("ticket_generator", event=event, analysis=triage)
+    check("ticket_generator 可消费研判结论", err, False)
+
+
 def main() -> int:
     list_tools_tests()
     call_tool_tests()
@@ -212,6 +285,7 @@ def main() -> int:
     initialize_tests()
     cli_pipe_tests()
     protocol_tests()
+    upstream_passthrough_tests()
     print(f"\n=== {PASS} passed, {FAIL} failed ===")
     return 1 if FAIL else 0
 

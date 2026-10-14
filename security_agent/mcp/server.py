@@ -17,6 +17,13 @@
 - `tools/call` 声明与实现对齐：`_list_tools` 声明 `{kwargs:{...}}` 而实现读扁平键，
   且 `event` 以 JSON dict 传入（工具要求 SecurityEvent 属性），
   导致**10 个工具经 MCP 一个也调不动**——见 `_coerce_event` 与下方 schema。
+
+链路可通性（2026-10-14 二次修复）：
+- 上游观察结果同样需要 dict→`ToolObservation` 还原（见 `_coerce_observation`）。
+  此前只还原了 `event`、漏了 observation，使 `false_positive_check` /
+  `incident_triage` 在 MCP 通道上无法完成「上游输出回传下游」的唯一可行用法，
+  即**研判主入口不可达**。工具单测与 `tools/list` 均照不出此问题，
+  只有串起完整链路的出口集成断言能照出。
 """
 from __future__ import annotations
 
@@ -26,6 +33,17 @@ import traceback
 from typing import Any, Optional
 
 PROTOCOL_VERSION = "2024-11-05"
+
+# 需要由 dict 还原为 ToolObservation 的参数名。
+# 必须与 `_call_tool` 的转发、以及 `TOOL_ARGUMENT_SCHEMA` 的声明保持一致：
+# 三者任一处漏项，都会让依赖该参数的工具在协议层静默不可用。
+OBSERVATION_ARGUMENTS = (
+    "asset_observation",
+    "log_observation",
+    "intel_observation",
+    "history_observation",
+    "false_positive_observation",
+)
 
 
 class McpServer:
@@ -164,6 +182,30 @@ class McpServer:
         except Exception:  # noqa: BLE001 - 构造失败则原样返回，由工具侧 fail-open 处理
             return payload
 
+    @staticmethod
+    def _coerce_observation(payload: Any) -> Any:
+        """把 MCP 传入的观察结果 JSON 还原为 `ToolObservation`。
+
+        与 `_coerce_event` 成对：一个还原事件，一个还原上游观察结果。
+
+        **为什么必须做**：工具内部按*属性*访问观察结果
+        （`asset_observation.details`），而 JSON-RPC 只能传 JSON。调用方把上游
+        `asset_lookup` 的输出原样回传时是个 dict，不做还原即
+        `AttributeError: 'dict' object has no attribute 'details'` ——
+        结果是 `false_positive_check` 与 `incident_triage`（研判主入口）
+        这两个依赖上游的工具**在 MCP 通道上永远调不通**，整条研判链路断在
+        协议层，而工具单测与 `tools/list` 都照不出这个问题。
+        """
+        if not isinstance(payload, dict):
+            return payload
+        try:
+            from security_agent.agent.models import ToolObservation
+
+            known = set(ToolObservation.__dataclass_fields__)
+            return ToolObservation(**{k: v for k, v in payload.items() if k in known})
+        except Exception:  # noqa: BLE001 - 还原失败原样返回，由工具侧 fail-open 处理
+            return payload
+
     def _call_tool(self, name: str, arguments: dict) -> dict:
         """调用工具并序列化结果（fail-open：未知工具/异常均返回 isError 不崩溃）。"""
         try:
@@ -187,6 +229,14 @@ class McpServer:
         # AttributeError。这是「10 个工具经 MCP 一个也调不动」的直接根因。
         event = self._coerce_event(arguments.get("event"))
 
+        # 上游观察结果同理：工具按属性读 `.summary` / `.details`，必须还原为
+        # ToolObservation，否则调用方「把上游输出回传下游」这条唯一可行用法
+        # 必然 AttributeError（false_positive_check / incident_triage 首当其冲）。
+        observations = {
+            key: self._coerce_observation(arguments.get(key))
+            for key in OBSERVATION_ARGUMENTS
+        }
+
         try:
             # 工具依赖 kwargs（event/knowledge_hub 等），构造最小环境
             from security_agent.app import build_app
@@ -197,11 +247,7 @@ class McpServer:
                 knowledge_hub=app.knowledge_hub,
                 analysis=arguments.get("analysis"),
                 command=arguments.get("command"),
-                asset_observation=arguments.get("asset_observation"),
-                log_observation=arguments.get("log_observation"),
-                intel_observation=arguments.get("intel_observation"),
-                history_observation=arguments.get("history_observation"),
-                false_positive_observation=arguments.get("false_positive_observation"),
+                **observations,
             )
             return {
                 "content": [
