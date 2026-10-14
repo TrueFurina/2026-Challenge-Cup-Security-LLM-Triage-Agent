@@ -397,7 +397,16 @@ class IocSearchTool(Tool):
     """IOC 情报搜索（阶段 3 HuntAgent 用）：按主机/IP/域名/进程检索情报与知识库。"""
 
     name = "ioc_search"
-    # 返回命中列表（非 ToolObservation）：`hits if hits else []`
+    # 返回**命中列表**，而非其余 10 个工具的统一形态 `ToolObservation`。
+    # 这是刻意的既成事实，不是遗漏（2026-10-14 复核）：
+    #   · 检索语义——命中项本身就是结论，没有要转交下游的中间结论；
+    #   · 无任何消费方按 `ToolObservation` 解析它（`agents/coordinator.py` 只注册
+    #     工具对象本身，输出进 context 供 LLM 阅读）；
+    #   · MCP 出口矩阵门禁亦不约束返回形态，故此处不构成契约缺陷。
+    # 原实现在 return 前算过一个 `summary`（「IOC 情报命中 N 条」）却从未返回 ——
+    # 死变量，属未完成的改写残留，已删除。**没有**顺手改成 `ToolObservation`：
+    # 统一形态会改变 LLM 可见的工具输出面，该面被评测口径间接依赖，
+    # 要改须连同评测基线一起动，不能夹带在"清理"里。
     requires = ("event",)
 
     def run(self, **kwargs):
@@ -417,8 +426,8 @@ class IocSearchTool(Tool):
                 hits.append(
                     f"{record.indicator} [{record.indicator_type}] 信誉: {record.reputation}; {record.note}"
                 )
-        summary = f"IOC 情报命中 {len(hits)} 条" if hits else "未命中已知 IOC 情报"
-        return hits if hits else []
+        # 空列表 = 「检索过、未命中」，与调用失败（MCP 层 isError=true）可区分。
+        return hits
 
 
 class ToolRegistry:
