@@ -37,11 +37,21 @@ def check(name: str, actual, expected):
     FAIL += int(not ok)
 
 
-def make_server():
+def make_server(with_command: bool = False):
     from security_agent.app import build_app
 
     app = build_app()
-    return McpServer(tool_registry=app.tool_registry)
+    registry = app.tool_registry
+    if with_command and "command_executor" not in registry.tools:
+        # 命令工具默认关闭（SECURITY_AGENT_ENABLE_COMMAND_TOOL=0），
+        # 但它的契约（required 不含 event、只认 command）仍需被断言覆盖。
+        from security_agent.tools.implementations import (
+            CommandExecutionTool,
+            ToolRegistry,
+        )
+
+        registry = ToolRegistry(list(registry.tools.values()) + [CommandExecutionTool()])
+    return McpServer(tool_registry=registry)
 
 
 def list_tools_tests():
@@ -114,8 +124,9 @@ def call_tool_tests():
         )["result"]
         check(f"{tool_name} 经 MCP 可调用", r.get("isError"), False)
 
-    # 依赖上游参数的工具：失败信息必须可操作（告诉调用方缺什么），
-    # 而不是抛一个 LLM 无法据以纠正的裸 AttributeError 文案。
+    # 依赖上游参数的工具：失败信息必须可操作（**点名**缺哪个参数），
+    # 而不是抛一个 LLM 无法据以纠正的裸 AttributeError 文案，
+    # 也不是一句含糊的「依赖上游阶段参数」让它去猜。
     dep = server.handle(
         {
             "jsonrpc": "2.0",
@@ -125,7 +136,23 @@ def call_tool_tests():
         }
     )["result"]
     check("缺上游参数 → isError", dep.get("isError"), True)
-    check("缺参提示可操作（指明补 analysis/*_observation）", "依赖上游阶段参数" in dep["content"][0]["text"], True)
+    dep_text = dep["content"][0]["text"]
+    check("缺参提示点名参数", "缺少必需参数" in dep_text, True)
+    check("缺参提示含 asset_observation", "asset_observation" in dep_text, True)
+
+    # 非上游类缺参不得被误报成「缺上游阶段参数」：command_executor 唯一
+    # 必需入参是 command，与 analysis / *_observation 无关。
+    cmd = make_server(with_command=True).handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 24,
+            "method": "tools/call",
+            "params": {"name": "command_executor", "arguments": {"event": {"id": "EVENT-001"}}},
+        }
+    )["result"]
+    cmd_text = cmd["content"][0]["text"]
+    check("command_executor 缺 command → isError", cmd.get("isError"), True)
+    check("提示点名 command 而非上游参数", "缺少必需参数: command" in cmd_text, True)
 
 
 def protocol_tests():
@@ -152,9 +179,38 @@ def protocol_tests():
     schema = tools[0]["inputSchema"]
     check("声明含 event", "event" in schema["properties"], True)
     check("声明不再用与实现不符的 kwargs 包裹", "kwargs" in schema["properties"], False)
-    check("required 为 [event]", schema.get("required"), ["event"])
-    check("声明键集与实现转发键集一致", set(schema["properties"]), set(server.TOOL_ARGUMENT_SCHEMA))
-    check("全部工具 schema 一致", all(t["inputSchema"] == schema for t in tools), True)
+    check("properties 键集来自单一事实源", set(schema["properties"]), set(server.TOOL_ARGUMENT_SCHEMA))
+
+    # required 必须逐工具精确。此前对所有工具硬编码 ["event"]，而 6/11 个工具
+    # 实际还需要 analysis / *_observation，command_executor 更只要 command ——
+    # 声明失真，遵循声明的客户端必然调不动。
+    check(
+        "required 不再对所有工具硬编码",
+        len({tuple(t["inputSchema"]["required"]) for t in tools}) > 1,
+        True,
+    )
+    check(
+        "required ⊆ properties",
+        all(set(t["inputSchema"]["required"]) <= set(schema["properties"]) for t in tools),
+        True,
+    )
+    check("每个工具 required 非空", all(t["inputSchema"]["required"] for t in tools), True)
+    reg = server.tool_registry
+    check(
+        "required 与 Tool.requires 逐工具一致（同源）",
+        all(list(reg.tools[t["name"]].requires) == t["inputSchema"]["required"] for t in tools),
+        True,
+    )
+    cmd_tools = make_server(with_command=True).handle(
+        {"jsonrpc": "2.0", "id": 11, "method": "tools/list"}
+    )["result"]["tools"]
+    cmd_schema = next(t["inputSchema"] for t in cmd_tools if t["name"] == "command_executor")
+    check("command_executor required 为 [command]（不含 event）", cmd_schema["required"], ["command"])
+    check(
+        "需额外入参的工具在 description 中标注",
+        any("另需" in t["description"] for t in tools),
+        True,
+    )
 
 
 def error_tests():

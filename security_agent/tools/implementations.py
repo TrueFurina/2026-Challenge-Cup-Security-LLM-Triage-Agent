@@ -9,6 +9,7 @@ from security_agent.tools.base import Tool
 
 class AssetLookupTool(Tool):
     name = "asset_lookup"
+    requires = ("event",)
 
     def run(self, **kwargs):
         event = kwargs["event"]
@@ -35,6 +36,7 @@ class AssetLookupTool(Tool):
 
 class LogLookupTool(Tool):
     name = "log_lookup"
+    requires = ("event",)
 
     def run(self, **kwargs):
         event = kwargs["event"]
@@ -50,6 +52,7 @@ class LogLookupTool(Tool):
 
 class IntelLookupTool(Tool):
     name = "intel_lookup"
+    requires = ("event",)
 
     def run(self, **kwargs):
         event = kwargs["event"]
@@ -65,6 +68,7 @@ class IntelLookupTool(Tool):
 
 class HistoryAlertLookupTool(Tool):
     name = "history_alert_lookup"
+    requires = ("event",)
 
     def run(self, **kwargs):
         event = kwargs["event"]
@@ -97,12 +101,18 @@ class HistoryAlertLookupTool(Tool):
 
 class FalsePositiveCheckTool(Tool):
     name = "false_positive_check"
+    # 必需项只有 event 与 asset_observation：`run` 要读 event 的字段与
+    # `asset_observation.details`（维护窗口 / 基线进程两个结构化信号）。
+    # 刻意**不含** log_observation —— 见 run 内的语料隔离说明，
+    # 声明必须等于真实契约，多报依赖会让客户端白传参数（由
+    # scripts/_mcp_matrix_gate.py 的必要性断言把住）。
+    requires = ("event", "asset_observation")
 
     def run(self, **kwargs):
         event = kwargs["event"]
         asset_observation = kwargs["asset_observation"]
-        log_observation = kwargs["log_observation"]
-        # 语料隔离：仅事件自身字段参与关键词匹配。
+        # 语料隔离：仅事件自身字段参与关键词匹配。**刻意不取**
+        # log_observation/历史告警 —— 它们与本次事件无必然因果关系。
         # v1 缺陷：把资产画像与关联日志 details 一并拼入，导致用他机/历史
         # 上下文判定本次事件（如 DC-01 的基线进程 lsass.exe 让任何事件
         # 都像"凭据转储"，历史日志里的 maintenance 让攻击看起来像误报）。
@@ -150,6 +160,16 @@ class FalsePositiveCheckTool(Tool):
 
 class IncidentTriageTool(Tool):
     name = "incident_triage"
+    # 研判主入口：正常路径透传给 triage_event 消费全部上游观察结果，
+    # 兜底路径也逐个读 summary。缺任一 observation 即失败。
+    requires = (
+        "event",
+        "asset_observation",
+        "log_observation",
+        "intel_observation",
+        "history_observation",
+        "false_positive_observation",
+    )
 
     @staticmethod
     def _adapt_kwargs(kwargs: dict) -> dict:
@@ -225,6 +245,7 @@ class IncidentTriageTool(Tool):
 
 class PlaybookMatcherTool(Tool):
     name = "playbook_matcher"
+    requires = ("event", "analysis")
 
     def run(self, **kwargs):
         event = kwargs["event"]
@@ -267,6 +288,7 @@ class PlaybookMatcherTool(Tool):
 
 class TicketGeneratorTool(Tool):
     name = "ticket_generator"
+    requires = ("event", "analysis")
 
     def run(self, **kwargs):
         event = kwargs["event"]
@@ -321,6 +343,7 @@ class TicketGeneratorTool(Tool):
 
 class HostIsolationSimulatorTool(Tool):
     name = "host_isolation_simulator"
+    requires = ("event", "analysis")
 
     def run(self, **kwargs):
         event = kwargs["event"]
@@ -349,6 +372,9 @@ class HostIsolationSimulatorTool(Tool):
 
 class CommandExecutionTool(Tool):
     name = "command_executor"
+    # 不读 event：唯一必需入参是 `command`。此前被硬编码声明为 required=["event"]，
+    # 遵循声明的客户端会传 event 而不传 command，调用必失败。
+    requires = ("command",)
 
     def run(self, **kwargs):
         command = kwargs["command"]
@@ -371,6 +397,8 @@ class IocSearchTool(Tool):
     """IOC 情报搜索（阶段 3 HuntAgent 用）：按主机/IP/域名/进程检索情报与知识库。"""
 
     name = "ioc_search"
+    # 返回命中列表（非 ToolObservation）：`hits if hits else []`
+    requires = ("event",)
 
     def run(self, **kwargs):
         event = kwargs["event"]

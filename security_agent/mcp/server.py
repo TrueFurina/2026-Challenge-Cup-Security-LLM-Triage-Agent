@@ -24,6 +24,14 @@
   `incident_triage` 在 MCP 通道上无法完成「上游输出回传下游」的唯一可行用法，
   即**研判主入口不可达**。工具单测与 `tools/list` 均照不出此问题，
   只有串起完整链路的出口集成断言能照出。
+
+声明与实现同源（2026-10-14 三次修复）：
+- `tools/list` 的 `inputSchema.required` 改为逐工具取自 `Tool.requires`。
+  此前对所有工具硬编码 `["event"]`，而实测 11 个工具中 6 个只传 event 必然
+  失败——声明即失真，遵循声明的客户端调不动。`command_executor` 更极端：
+  它不读 `event`，唯一必需入参是 `command`。
+- 失败提示改为点名「缺少必需参数: X」；此前用 `"NoneType" in str(exc)`
+  一刀切，把缺 `command` 也归因为"缺上游阶段参数"，把调用方引向错误方向。
 """
 from __future__ import annotations
 
@@ -138,18 +146,35 @@ class McpServer:
 
     # ── 内部 ──────────────────────────────────────────────
     def _list_tools(self) -> list[dict]:
-        """从 ToolRegistry 动态生成工具清单。"""
+        """从 ToolRegistry 动态生成工具清单。
+
+        每个工具的 `required` 取自 `Tool.requires`（工具自己声明的必需入参，
+        与 `run()` 实际读取的键同源），**不再对所有工具硬编码 `["event"]`**。
+
+        2026-10-14 修复：硬编码曾使 11 个工具中的 6 个「声明与实现不符」——
+        `playbook_matcher` / `ticket_generator` / `host_isolation_simulator`
+        实际需要 `analysis`，`false_positive_check` / `incident_triage` 需要
+        `*_observation`，而 `command_executor` 根本不要 `event` 只要 `command`。
+        遵循声明的客户端按 `required` 传参，必然调用失败。
+        """
         tools = []
         for name, tool in self.tool_registry.tools.items():
             doc = (tool.__class__.__doc__ or "").strip().split("\n")[0]
+            required = list(getattr(tool, "requires", ()) or ("event",))
+            extra = [key for key in required if key != "event"]
+            description = doc or f"安全工具: {name}"
+            if extra:
+                # 让客户端一眼看出「这个工具不是只传 event 就能调」，
+                # 而不是调用失败后再靠报错反推。
+                description = f"{description}（另需 {'/'.join(extra)}）"
             tools.append(
                 {
                     "name": name,
-                    "description": doc or f"安全工具: {name}",
+                    "description": description,
                     "inputSchema": {
                         "type": "object",
                         "properties": dict(self.TOOL_ARGUMENT_SCHEMA),
-                        "required": ["event"],
+                        "required": required,
                     },
                 }
             )
@@ -206,6 +231,21 @@ class McpServer:
         except Exception:  # noqa: BLE001 - 还原失败原样返回，由工具侧 fail-open 处理
             return payload
 
+    @staticmethod
+    def _missing_required(tool, arguments: dict) -> list[str]:
+        """列出「工具声明必需、但调用方没给」的入参键。
+
+        提示必须**点名具体参数**：此前用 `"NoneType" in str(exc)` 一刀切，
+        把 `command_executor` 缺 `command` 也归因为"缺上游阶段参数"，
+        提示调用方去补 `analysis` / `*_observation` —— 方向完全错了，
+        LLM 客户端会照着提示补一堆无关参数并反复空转。
+        """
+        return [
+            key
+            for key in (getattr(tool, "requires", ()) or ())
+            if arguments.get(key) is None
+        ]
+
     def _call_tool(self, name: str, arguments: dict) -> dict:
         """调用工具并序列化结果（fail-open：未知工具/异常均返回 isError 不崩溃）。"""
         try:
@@ -261,15 +301,18 @@ class McpServer:
                 "isError": False,
             }
         except Exception as exc:  # noqa: BLE001 - MCP 工具调用异常不崩溃
-            # 只传 event 就调用依赖上游结论的工具（如 false_positive_check）时，
-            # 原始报错是 "'NoneType' object has no attribute 'details'" —— 调用方
-            # （LLM）无法据此判断缺什么。补一句可操作的提示，避免它反复空转。
-            hint = ""
-            if "NoneType" in str(exc):
+            # 失败提示必须可操作：点名「缺哪个参数」，而不是抛一句原始报错。
+            # 调用方是 LLM，拿不到可纠正的信息就会反复空转。
+            missing = self._missing_required(tool, arguments)
+            if missing:
+                hint = f"（缺少必需参数: {', '.join(missing)}）"
+            elif "NoneType" in str(exc):
                 hint = (
                     "（该工具依赖上游阶段参数：请在 arguments 中一并提供 "
                     "analysis / *_observation 中相应的字段，仅传 event 不足以调用）"
                 )
+            else:
+                hint = ""
             return {
                 "content": [{"type": "text", "text": f"工具执行失败: {exc}{hint}"}],
                 "isError": True,
