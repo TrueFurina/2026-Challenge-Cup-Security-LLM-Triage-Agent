@@ -11,6 +11,14 @@ class AppConfig:
     llm_model: str
     llm_timeout_seconds: int
     command_tool_enabled: bool
+    #: 是否把研判结果落盘为运行时数据（审计台账 `data/ledger/*` 与误报记忆
+    #: `data/triage_history.jsonl`）。**默认开启**——生产语义要留证据。
+    #: 测试 / 隔离跑批置 0（`SECURITY_AGENT_RUNTIME_WRITES=0`）。
+    #:
+    #: 为什么需要它：`SecurityAgent.evaluation_sandbox()` 是**实例方法**，
+    #: CLI 与子进程路径（`_verify.py` 经 `cli.py analyze`）拿不到 app 实例，
+    #: 关不掉写；这两条路径会覆写生产台账。此开关是它们唯一可用的收口。
+    runtime_writes_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -29,6 +37,7 @@ class AppConfig:
             llm_timeout_seconds=int(os.getenv("SECURITY_AGENT_LLM_TIMEOUT", "45")),
             command_tool_enabled=os.getenv("SECURITY_AGENT_ENABLE_COMMAND_TOOL", "0")
             == "1",
+            runtime_writes_enabled=os.getenv("SECURITY_AGENT_RUNTIME_WRITES", "1") == "1",
         )
 
 

@@ -214,6 +214,13 @@ def readback_integration_tests(tmp: Path):
     单测覆盖不到的是接线：`review_feedback.jsonl` 过去被 Web 只写不读，人工点下
     「驳回」对该事件的再次研判毫无影响——面板显示「已人工驳回」，Agent 侧却照旧
     给出同一结论并标 auto_reviewed。本测试从 `app._triage` 入口出发锁死读回。
+
+    隔离说明：**刻意不用 `app.evaluation_sandbox()`**——沙箱会把 `record_history`
+    一并关掉，而本测试的断言恰恰是「写不写记忆」（`首次研判写入记忆: count == 1`），
+    实测套上沙箱后 3 条断言立刻 FAIL。故此处手动隔离：memory / feedback 指向
+    临时库 + **关闭 ledger 写**。ledger 不参与本测试任何断言，但 `app._triage`
+    会覆写生产审计台账（实测 `ledger/EVENT-003.json` 的 mtime 被改写）——
+    这正是此前漏掉、也是"每处调用方各自记得关"漂移的又一实例。
     """
     print("== 7. 读回闭环（集成）==")
     import security_agent.ai.triage as triage_mod
@@ -230,10 +237,11 @@ def readback_integration_tests(tmp: Path):
     try:
         app = build_app()
         # 临时记忆 + 临时反馈库：断言「写不写记忆」时不能碰真实运行时数据
-        feedback_path = tmp / "it_feedback.jsonl"
-        memory_path = tmp / "it_history.jsonl"
-        app.feedback = HumanFeedbackStore(path=feedback_path)
-        app.memory = MemoryStore(path=memory_path)
+        app.feedback = HumanFeedbackStore(path=tmp / "it_feedback.jsonl")
+        app.memory = MemoryStore(path=tmp / "it_history.jsonl")
+        # ledger 不参与本测试断言，但 _triage 会写它 → 关掉真实证据的写入
+        app.record_ledger = False
+
         event = app.intake_service.get_event("EVENT-003")
 
         # ① 无人复核：常规门控，不得出现 human_* 状态
@@ -289,16 +297,24 @@ def readback_integration_tests(tmp: Path):
 
 
 def sandbox_isolation_tests():
-    """== 8. 评测沙箱对 feedback 的读隔离 ==
+    """== 8. 评测沙箱运行时不变量（feedback / ledger / 研判历史）==
 
     同 memory：本机运营产生的 `review_feedback.jsonl` 属生产数据。若评测期仍被
     读取，「同一份代码」会因机器复盘历史不同而给出不同数字，冻结集成绩不可复现。
+
+    2026-10-14 扩展：只断言 feedback 是一项**盲区**——沙箱真正的契约是「运行时产物
+    字节级零变化」，而 §7 那条漏关 ledger 的路径恰好从这条盲区里溜了过去。
+    现改为对整个运行时产物集合做快照比对（共用 `scripts/_runtime_isolation.py`）。
     """
-    print("== 8. 评测沙箱读隔离（feedback）==")
+    print("== 8. 评测沙箱运行时不变量（feedback / ledger / 研判历史）==")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _runtime_isolation import RUNTIME_PATHS, drift, snapshot
+
     from security_agent.app import build_app
 
     app = build_app()
     real_path = app.feedback.path
+    before = snapshot()
     before_bytes = real_path.read_bytes() if real_path.exists() else b""
     before_count = app.feedback.count()
     with app.evaluation_sandbox():
@@ -311,20 +327,39 @@ def sandbox_isolation_tests():
         (real_path.read_bytes() if real_path.exists() else b"") == before_bytes,
         True,
     )
+    check(
+        f"全部 {len(RUNTIME_PATHS)} 类运行时产物字节未变动（含 ledger 与研判历史）",
+        drift(before, snapshot()),
+        [],
+    )
 
 
 def main() -> int:
-    mapping_tests()
-    normalize_tests()
-    ticket_gate_tests()
-    e2e_tests()
-    feedback_file_tests()
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        feedback_store_tests(tmp)
-        dirty_data_tests(tmp)
-        readback_integration_tests(tmp)
-    sandbox_isolation_tests()
+    global FAIL
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _runtime_isolation import format_report, isolated_runtime
+
+    # 整体防护：脚本**全程**（不只沙箱区间）都不得改写运行时产物。
+    # 只测沙箱自身不够——§7 那条漏关 ledger 的路径在沙箱之外，
+    # 靠"单独测沙箱"永远照不出来。这里用前后快照比对兜底，且一旦漂移
+    # **自动还原**：即使本脚本将来再退回污染状态，也不会留下脏数据。
+    with isolated_runtime(disable_writes=False) as report:
+        mapping_tests()
+        normalize_tests()
+        ticket_gate_tests()
+        e2e_tests()
+        feedback_file_tests()
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            feedback_store_tests(tmp)
+            dirty_data_tests(tmp)
+            readback_integration_tests(tmp)
+        sandbox_isolation_tests()
+
+    print(f"\n[运行时产物] {format_report(report)}")
+    if report.drift:
+        FAIL += 1
+
     print(f"\n=== {PASS} passed, {FAIL} failed ===")
     return 1 if FAIL else 0
 

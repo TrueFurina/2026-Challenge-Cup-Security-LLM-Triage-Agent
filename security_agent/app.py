@@ -20,10 +20,18 @@ def build_app() -> SecurityAgent:
     else:
         llm = MockLLM()
 
-    return SecurityAgent(
+    app = SecurityAgent(
         llm=llm,
         intake_service=EventIntakeService.default(),
         knowledge_hub=KnowledgeHub.default(),
         tool_registry=ToolRegistry.default(config),
         evaluation_service=EvaluationService.default(),
     )
+    if not config.runtime_writes_enabled:
+        # 隔离模式（SECURITY_AGENT_RUNTIME_WRITES=0）：不写审计台账、不写误报记忆。
+        # 为什么放在这里而不是 `evaluation_sandbox()` 里：后者是**实例方法**，
+        # 而 CLI 与子进程路径（如 `scripts/_verify.py` 调 `cli.py analyze`）
+        # 各自新建 app、拿不到实例，只有配置开关能统一覆盖。
+        app.record_ledger = False
+        app.record_history = False
+    return app

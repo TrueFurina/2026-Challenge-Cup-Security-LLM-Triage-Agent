@@ -1,45 +1,67 @@
-"""快速验证脚本：列出事件、分析 EVENT-001、运行评测"""
+"""快速验证脚本：列出事件、分析 EVENT-001、运行评测。
+
+隔离（2026-10-14 补）
+--------------------
+本脚本经 **CLI 子进程**走编排层（`analyze --event-id EVENT-001`）。子进程里
+`build_app()` 新建的 app 拿不到实例级隔离（`evaluation_sandbox()` 是实例方法），
+历史上会覆写生产审计台账 `data/ledger/EVENT-001.json` 与误报记忆
+`data/triage_history.jsonl`——实测两者 mtime 被改写（内容在当前样例数据下幂等，
+故 md5 不变；换成真实数据即真覆写）。
+
+两道防线：
+1. `SECURITY_AGENT_RUNTIME_WRITES=0` —— 子进程继承，从源头不写；
+2. `isolated_runtime()` 快照比对 —— 万一还有旁路写入，逐字节比对并**自动还原**，
+   且漂移即 exit 1（不留"跑完看起来没事"的假象）。
+"""
+import os
 import subprocess
 import sys
-import os
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(PROJECT_DIR)
 sys.path.insert(0, PROJECT_DIR)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-print("=== List Events ===")
-r = subprocess.run(
-    [sys.executable, "-m", "security_agent.cli", "list-events"],
-    capture_output=True, text=True, cwd=PROJECT_DIR,
-)
-print(r.stdout)
-if r.stderr:
-    print("ERR:", r.stderr[-300:] if len(r.stderr) > 300 else r.stderr)
+from _runtime_isolation import format_report, isolated_runtime  # noqa: E402
 
-print("=== Analyze EVENT-001 ===")
-r = subprocess.run(
-    [sys.executable, "-m", "security_agent.cli", "analyze", "--event-id", "EVENT-001"],
-    capture_output=True, text=True, timeout=30, cwd=PROJECT_DIR,
-)
-out = r.stdout
-if len(out) > 2000:
-    print(out[:1000] + "\n... (truncated) ...\n" + out[-500:])
-else:
-    print(out)
-if r.stderr:
-    print("ERR:", r.stderr[-300:] if len(r.stderr) > 300 else r.stderr)
+# 子进程继承：从源头关掉运行时写入
+os.environ["SECURITY_AGENT_RUNTIME_WRITES"] = "0"
 
-print("=== Evaluate ===")
-r = subprocess.run(
-    [sys.executable, "-m", "security_agent.cli", "evaluate"],
-    capture_output=True, text=True, timeout=60, cwd=PROJECT_DIR,
-)
-out2 = r.stdout
-if len(out2) > 1000:
-    print(out2[:800] + "\n... (truncated) ...\n" + out2[-300:])
-else:
-    print(out2)
-if r.stderr:
-    print("ERR:", r.stderr[-300:] if len(r.stderr) > 300 else r.stderr)
 
+def _run(args, timeout=None):
+    return subprocess.run(
+        args, capture_output=True, text=True, cwd=PROJECT_DIR, timeout=timeout
+    )
+
+
+def _show(result, limit=2000):
+    out = result.stdout
+    if len(out) > limit:
+        print(out[: limit // 2] + "\n... (truncated) ...\n" + out[-limit // 4 :])
+    else:
+        print(out)
+    if result.stderr:
+        print("ERR:", result.stderr[-300:] if len(result.stderr) > 300 else result.stderr)
+
+
+with isolated_runtime(disable_writes=False) as report:
+    print("=== List Events ===")
+    _show(_run([sys.executable, "-m", "security_agent.cli", "list-events"]))
+
+    print("=== Analyze EVENT-001 ===")
+    _show(
+        _run(
+            [sys.executable, "-m", "security_agent.cli", "analyze", "--event-id", "EVENT-001"],
+            timeout=30,
+        )
+    )
+
+    print("=== Evaluate ===")
+    _show(
+        _run([sys.executable, "-m", "security_agent.cli", "evaluate"], timeout=60),
+        limit=1000,
+    )
+
+print(f"\n[运行时数据] {format_report(report)}")
 print("=== DONE ===")
+sys.exit(1 if report.drift else 0)
