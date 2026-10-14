@@ -2,6 +2,7 @@
 
 通过 stdio 使用 JSON-RPC 2.0 提供 MCP 核心方法：
 - initialize   ：协议握手
+- ping         ：存活探测（标准客户端 KeepAlive 会发）
 - tools/list   ：返回工具清单（从 ToolRegistry 动态生成）
 - tools/call   ：调用指定工具（fail-open：异常返回 error 不崩溃）
 
@@ -9,6 +10,13 @@
 1. 零依赖：不依赖 `mcp` python 包，纯标准库 json/sys，`pip install` 失败不影响
 2. 动态注册：从 ToolRegistry 自动发现工具，新增工具无需改 MCP 层
 3. fail-open：任何异常返回 JSON-RPC error，进程不退出
+
+协议合规（2026-10-14 修复，此前这三处使标准客户端无法对通）：
+- 通知不响应：`notifications/initialized` 曾回一条 id=null 的 -32601 错误；
+- 支持 `ping`；
+- `tools/call` 声明与实现对齐：`_list_tools` 声明 `{kwargs:{...}}` 而实现读扁平键，
+  且 `event` 以 JSON dict 传入（工具要求 SecurityEvent 属性），
+  导致**10 个工具经 MCP 一个也调不动**——见 `_coerce_event` 与下方 schema。
 """
 from __future__ import annotations
 
@@ -22,6 +30,25 @@ PROTOCOL_VERSION = "2024-11-05"
 
 class McpServer:
     """极简 MCP server（stdio + JSON-RPC 2.0）。"""
+
+    # 工具实际接受的参数键 —— 必须与 `_call_tool` 的转发清单逐项一致。
+    # 声明（inputSchema）与实现不一致时，任何遵循声明的客户端都会调用失败。
+    TOOL_ARGUMENT_SCHEMA: dict[str, dict] = {
+        "event": {
+            "type": "object",
+            "description": "安全事件，至少含 id/host；带 id 时按 id 取权威事件",
+        },
+        "analysis": {"type": "object", "description": "上一阶段研判结论（可选）"},
+        "command": {"type": "string", "description": "命令文本（仅命令类工具需要，可选）"},
+        "asset_observation": {"type": "object", "description": "资产观察结果（可选）"},
+        "log_observation": {"type": "object", "description": "日志观察结果（可选）"},
+        "intel_observation": {"type": "object", "description": "情报观察结果（可选）"},
+        "history_observation": {"type": "object", "description": "历史告警观察结果（可选）"},
+        "false_positive_observation": {
+            "type": "object",
+            "description": "误报判定依据（可选）",
+        },
+    }
 
     def __init__(self, tool_registry):
         self.tool_registry = tool_registry
@@ -44,7 +71,15 @@ class McpServer:
                 sys.stdout.flush()
 
     def handle(self, message: dict) -> Optional[dict]:
-        """处理单条 JSON-RPC 消息（供测试直接调用）。"""
+        """处理单条 JSON-RPC 消息（供测试直接调用）。
+
+        **通知（无 `id`）必须返回 None**：JSON-RPC 2.0 规定通知不得被响应。
+        此前对 `notifications/initialized` 回了一条 id=null 的 -32601 错误，
+        标准客户端（官方 go-sdk 等）会把它当成不符合预期的消息。
+        """
+        if "id" not in message:
+            return None  # 通知：按协议不响应
+
         request_id = message.get("id")
         method = message.get("method")
 
@@ -58,6 +93,9 @@ class McpServer:
                     "serverInfo": {"name": "security-agent-mcp", "version": "0.1.0"},
                 },
             }
+        if method == "ping":
+            # 标准客户端（官方 SDK 的 KeepAlive）会发 ping；此前回 -32601 易被判为不可用
+            return {"jsonrpc": "2.0", "id": request_id, "result": {}}
         if method == "tools/list":
             return {
                 "jsonrpc": "2.0",
@@ -92,11 +130,39 @@ class McpServer:
                     "description": doc or f"安全工具: {name}",
                     "inputSchema": {
                         "type": "object",
-                        "properties": {"kwargs": {"type": "object", "description": "工具参数"}},
+                        "properties": dict(self.TOOL_ARGUMENT_SCHEMA),
+                        "required": ["event"],
                     },
                 }
             )
         return tools
+
+    @staticmethod
+    def _coerce_event(payload: Any) -> Any:
+        """把 MCP 传入的事件 JSON 还原为 `SecurityEvent`。
+
+        工具签名的 `event` 是 SecurityEvent（读 `event.host` 等属性）；直接传 dict
+        会以 `AttributeError: 'dict' object has no attribute 'host'` 失败。优先按
+        `id` 取库内权威事件（字段最全，与 Web/CLI 同源），取不到再按字段构造。
+        """
+        if not isinstance(payload, dict):
+            return payload
+        if payload.get("id"):
+            try:
+                from security_agent.intake.service import EventIntakeService
+
+                return EventIntakeService.default().get_event(str(payload["id"]))
+            except Exception:  # noqa: BLE001 - 取不到就走字段构造
+                pass
+        try:
+            from security_agent.agent.models import SecurityEvent
+
+            fields = {
+                k: v for k, v in payload.items() if k in SecurityEvent.__dataclass_fields__
+            }
+            return SecurityEvent(**fields)
+        except Exception:  # noqa: BLE001 - 构造失败则原样返回，由工具侧 fail-open 处理
+            return payload
 
     def _call_tool(self, name: str, arguments: dict) -> dict:
         """调用工具并序列化结果（fail-open：未知工具/异常均返回 isError 不崩溃）。"""
@@ -108,13 +174,26 @@ class McpServer:
                 "isError": True,
             }
 
+        arguments = arguments or {}
+        # 兼容两种传参：按声明 `{"kwargs": {...}}` 包裹，或扁平直传。
+        # 历史实现只读扁平键，却对外声明 `kwargs` 包裹 —— 契约自相矛盾，
+        # 遵循声明的客户端必然全挂。
+        if isinstance(arguments.get("kwargs"), dict):
+            arguments = {
+                **arguments["kwargs"],
+                **{k: v for k, v in arguments.items() if k != "kwargs"},
+            }
+        # `event` 必须是 SecurityEvent：工具读 event.host 等属性，传 JSON dict 会
+        # AttributeError。这是「10 个工具经 MCP 一个也调不动」的直接根因。
+        event = self._coerce_event(arguments.get("event"))
+
         try:
             # 工具依赖 kwargs（event/knowledge_hub 等），构造最小环境
             from security_agent.app import build_app
 
             app = build_app()
             result = tool.run(
-                event=arguments.get("event"),
+                event=event,
                 knowledge_hub=app.knowledge_hub,
                 analysis=arguments.get("analysis"),
                 command=arguments.get("command"),
@@ -136,8 +215,17 @@ class McpServer:
                 "isError": False,
             }
         except Exception as exc:  # noqa: BLE001 - MCP 工具调用异常不崩溃
+            # 只传 event 就调用依赖上游结论的工具（如 false_positive_check）时，
+            # 原始报错是 "'NoneType' object has no attribute 'details'" —— 调用方
+            # （LLM）无法据此判断缺什么。补一句可操作的提示，避免它反复空转。
+            hint = ""
+            if "NoneType" in str(exc):
+                hint = (
+                    "（该工具依赖上游阶段参数：请在 arguments 中一并提供 "
+                    "analysis / *_observation 中相应的字段，仅传 event 不足以调用）"
+                )
             return {
-                "content": [{"type": "text", "text": f"工具执行失败: {exc}"}],
+                "content": [{"type": "text", "text": f"工具执行失败: {exc}{hint}"}],
                 "isError": True,
             }
 

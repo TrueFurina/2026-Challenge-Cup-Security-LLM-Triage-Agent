@@ -1,9 +1,12 @@
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 
 from security_agent.ai import client as llm_client
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -237,8 +240,20 @@ class EvaluationService:
         的成本数字与真实开销脱钩。单价为显式假设，可用环境变量
         SECURITY_AGENT_PROMPT_PRICE_PER_M / SECURITY_AGENT_COMPLETION_PRICE_PER_M
         （元/百万 token）覆盖。无 LLM 调用时返回 0.0。
+
+        注意：本值是**下限**。若本轮存在 metering_failures（响应结构异常致 token
+        未能计量），实际开销会高于此处——故下方显式告警，避免报告引用一个偏低的
+        成本数字却不自知。
         """
-        return llm_client.estimate_cost_yuan(EvaluationService._llm_usage_delta(llm_snapshot))
+        delta = EvaluationService._llm_usage_delta(llm_snapshot)
+        lost = int(delta.get("metering_failures", 0) or 0)
+        if lost:
+            logger.warning(
+                "⚠ 本轮有 %d 次 LLM 调用的 token 未能计量（响应结构异常），"
+                "报告中的 token 数与成本估算为**下限偏低值**，不可作为可信口径引用。",
+                lost,
+            )
+        return llm_client.estimate_cost_yuan(delta)
 
     @staticmethod
     def _llm_usage_delta(snapshot: dict) -> dict:
@@ -253,6 +268,9 @@ class EvaluationService:
                 "completion_tokens",
                 "reasoning_tokens",
                 "truncated_responses",
+                # 计量完整性哨兵：非 0 表示本轮 token/成本存在漏计，报告里的
+                # 数字随即不可引用。显式枚举键 ⇒ 新增计数器必须同步登记到这里。
+                "metering_failures",
             )
         }
 

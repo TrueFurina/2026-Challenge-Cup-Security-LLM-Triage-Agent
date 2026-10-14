@@ -237,6 +237,50 @@ def wiring_integration_tests():
         triage_mod.ai_chat_json = original
 
 
+def bad_line_tests(tmp: Path):
+    """坏行必须留下痕迹，不得静默丢弃。
+
+    为什么单列一节：坏行被静默 `continue` 时，调用方无法分辨「库里本来就没有记忆」
+    与「记忆在读取时被吃掉了」。后者意味着 Triage 少了一条误报证据，而链路看上去
+    一切正常——与「LLM 静默回退规则」同质，是最难自查的一类失效。
+
+    本节变异锚点：把 `self.skipped_lines += 1` 改回单纯 continue → 本节必 FAIL。
+    """
+    print("== 6. 坏行可见性 ==")
+    path = tmp / "bad_history.jsonl"
+    lines = [
+        '{"event_id": "GOOD-1", "host": "DC-01", "process": "powershell.exe", '
+        '"behavior": "PowerShell 编码命令", "event_type": "恶意脚本执行", '
+        '"risk_level": "critical", "confidence": "high", "is_false_positive": false}',
+        '{"event_id": "TRUNCATED-2", "host": "DC-01", "proc',  # 半行（写入被截断）
+        "这不是 JSON",  # 完全非 JSON
+        '{"event_id": "GOOD-3", "host": "DC-01", "process": "powershell.exe", '
+        '"behavior": "可疑下载", "event_type": "恶意脚本执行", '
+        '"risk_level": "high", "confidence": "medium", "is_false_positive": false}',
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    store = MemoryStore(path=path)
+    event = make_event(host="DC-01", process="powershell.exe")
+    hits = store.search(event, top_k=5)
+
+    check("跳过行数被记录", store.skipped_lines, 2)
+    check("坏行不计入检索结果", len(hits), 2)
+    check("保留下来的都是完好记录", sorted(h.get("event_id") for h in hits), ["GOOD-1", "GOOD-3"])
+    check("加载总数等于完好行数", len(store._load()), 2)
+
+    # skipped_lines 每次加载重置，避免跨次读取累积成假数字
+    store._load()
+    check("二次加载后计数重置为实际坏行数", store.skipped_lines, 2)
+
+    # 纯净文件 → 计数为 0（不得误报）
+    clean = tmp / "clean_history.jsonl"
+    clean.write_text(lines[0] + "\n", encoding="utf-8")
+    store2 = MemoryStore(path=clean)
+    store2.search(make_event(host="DC-01", process="powershell.exe"))
+    check("完好文件 no skipped", store2.skipped_lines, 0)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
@@ -244,6 +288,7 @@ def main() -> int:
         search_tests(tmp)
         limit_tests(tmp)
         clear_tests(tmp)
+        bad_line_tests(tmp)
     prompt_injection_tests()
     wiring_integration_tests()
     print(f"\n=== {PASS} passed, {FAIL} failed ===")

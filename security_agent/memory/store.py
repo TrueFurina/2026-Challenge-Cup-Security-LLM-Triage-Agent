@@ -24,6 +24,8 @@ class MemoryStore:
         self.path = path or (
             Path(__file__).resolve().parent.parent / "data" / "triage_history.jsonl"
         )
+        # 最近一次 _load() 跳过的坏行数。为 0 才说明「读到的记忆 == 库里的记忆」。
+        self.skipped_lines = 0
 
     # ── 写入 ──────────────────────────────────────────────
     def append(self, record: dict) -> None:
@@ -103,20 +105,30 @@ class MemoryStore:
             logger.warning("记忆裁剪失败（已忽略）: %s", exc)
 
     def _load(self) -> list[dict]:
+        """加载全部记忆；坏行跳过，但**必须留下痕迹**。
+
+        跳过而不记录会让调用方无法分辨「库里本来就没有记忆」与「记忆在读取时被
+        吃掉了」——后者意味着 Triage 少了一条误报证据，而链路看上去一切正常。
+        故每跳一行都告警，并累计到 `self.skipped_lines` 供自检/测试取证。
+        """
+        self.skipped_lines = 0
         if not self.path.exists():
             return []
         records = []
         try:
-            for line in self.path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue  # 跳过坏行
-        except OSError:
+            lines = self.path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            logger.warning("记忆文件读取失败（本次按空记忆处理）: %s", exc)
             return []
+        for lineno, line in enumerate(lines, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                self.skipped_lines += 1
+                logger.warning("记忆文件第 %d 行无法解析，已跳过: %s", lineno, exc)
         return records
 
     @staticmethod

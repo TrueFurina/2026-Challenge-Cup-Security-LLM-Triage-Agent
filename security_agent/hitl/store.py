@@ -40,6 +40,9 @@ class HumanFeedbackStore:
         self.path = path or (
             Path(__file__).resolve().parent.parent / "data" / FEEDBACK_FILENAME
         )
+        # 最近一次 load_all() 跳过的行数（坏行 / 非对象 / 非法 decision）。
+        # 人工复核是 HITL 闭环的唯一输入源，静默丢行 = 闭环从读侧悄悄失效。
+        self.skipped_lines = 0
 
     # ── 写入（供 Web 复核回写使用）────────────────────────
     def append(
@@ -100,25 +103,45 @@ class HumanFeedbackStore:
         return len(self.load_all())
 
     def load_all(self) -> list[HumanFeedbackRecord]:
+        """加载全部人工反馈。
+
+        坏行**必须警示而非静默跳过**：`latest()` 拿不到这一步就会降级为「无复核」，
+        Reviewer 因而保持自动裁决，操作员的"驳回"在界面上写进去了、链路里却没生效，
+        且全过程无任何报错——这是 HITL 闭环最难自查的一种失效。
+        """
+        self.skipped_lines = 0
         if not self.path.exists():
             return []
         records: list[HumanFeedbackRecord] = []
         try:
             lines = self.path.read_text(encoding="utf-8").splitlines()
-        except OSError:
+        except OSError as exc:
+            logger.warning("复核反馈文件读取失败（本次按无反馈处理）: %s", exc)
             return []
-        for line in lines:
+        for lineno, line in enumerate(lines, 1):
             line = line.strip()
             if not line:
                 continue
             try:
                 row = json.loads(line)
-            except json.JSONDecodeError:
-                continue  # 坏行跳过
+            except json.JSONDecodeError as exc:
+                self.skipped_lines += 1
+                logger.warning(
+                    "复核反馈第 %d 行无法解析，该条人工反馈已失效: %s", lineno, exc
+                )
+                continue
             if not isinstance(row, dict):
+                self.skipped_lines += 1
+                logger.warning("复核反馈第 %d 行不是 JSON 对象，该条人工反馈已失效", lineno)
                 continue
             decision = row.get("decision")
             if decision not in VALID_DECISIONS:
+                self.skipped_lines += 1
+                logger.warning(
+                    "复核反馈第 %d 行 decision 非法(%r)，该条人工反馈已失效",
+                    lineno,
+                    decision,
+                )
                 continue  # 非法决定值不计入（防止脏数据污染门控）
             records.append(
                 HumanFeedbackRecord(

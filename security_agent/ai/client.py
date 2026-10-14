@@ -48,6 +48,9 @@ _USAGE: dict[str, int] = {
     "completion_tokens": 0,
     "reasoning_tokens": 0,
     "truncated_responses": 0,
+    # 发生了计量失败的次数：正常必须恒为 0。非 0 意味着上面的 token/成本
+    # 存在漏计，评测报告中的「调用数 / 成本」随即失去可信度，不得对外引用。
+    "metering_failures": 0,
 }
 
 DEFAULT_PROMPT_PRICE_PER_MILLION = 2.0  # 元/百万 token（假设值，可按实际合同价覆盖）
@@ -93,11 +96,22 @@ def _read_price_env(name: str, fallback: float) -> float:
 
 
 def _record_usage(data: Any) -> None:
-    """累计一次成功请求的真实 token 用量；异常不影响主流程。"""
+    """累计一次成功请求的真实 token 用量；异常不影响主流程。
+
+    计量失败**必须可见**：`get_usage_stats()` 是评测报告「调用数 / 成本」的唯一
+    出处（`evaluation/service.py`、`_holdout_eval.py` 均取自此处）。此前整段被
+    `except: pass` 包住且不计数，一旦 provider 换了响应结构（usage 不是 dict、
+    choices 不是 list 等），一次**真实发生的付费调用**会从统计里凭空消失，报告
+    里的数字没人能发现有漏——这与「token 预算耗尽致 LLM 静默回退」同族的隐性问题。
+
+    因此：request 计数移到 try 之外（"发过几次请求"是最基础的事实，不应依赖响应
+    解析是否成功）；解析失败则累加 `metering_failures` 并告警。**评测时该值必须为
+    0**，否则本次 token/成本数字不可引用。
+    """
+    _USAGE["requests"] += 1
     try:
         usage = data.get("usage") or {}
         choice = (data.get("choices") or [{}])[0]
-        _USAGE["requests"] += 1
         _USAGE["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
         _USAGE["completion_tokens"] += int(usage.get("completion_tokens") or 0)
         _USAGE["reasoning_tokens"] += int(
@@ -105,8 +119,9 @@ def _record_usage(data: Any) -> None:
         )
         if choice.get("finish_reason") == "length":
             _USAGE["truncated_responses"] += 1
-    except Exception:  # noqa: BLE001 - 计量失败不得影响研判主流程
-        pass
+    except Exception as exc:  # noqa: BLE001 - 计量失败不得影响研判主流程
+        _USAGE["metering_failures"] += 1
+        logger.warning("LLM 用量计量失败（该次调用未计入 token/成本统计）: %s", exc)
 
 
 # ── 对外核心 API ──────────────────────────────────────────

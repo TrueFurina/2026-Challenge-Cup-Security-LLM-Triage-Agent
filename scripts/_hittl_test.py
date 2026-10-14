@@ -176,6 +176,8 @@ def dirty_data_tests(tmp: Path):
                 json.dumps({"event_id": "EVENT-OLD", "decision": "confirm", "note": "旧记录", "timestamp": "2026-08-10T00:00:00Z"}),
                 "{not json}",
                 json.dumps({"event_id": "EVENT-BAD", "decision": "maybe", "note": "非法决定值"}),
+                # 可解析但不是对象——曾是一条「修了却没用例覆盖」的分支（变异后 rc=0）
+                "[1, 2, 3]",
                 json.dumps({"event_id": "EVENT-NEW", "decision": "reject", "event_type": "误报", "risk_level": "low", "is_false_positive": True}),
             ]
         )
@@ -190,6 +192,20 @@ def dirty_data_tests(tmp: Path):
     check("旧格式无摘要 → has_verdict=False", old.has_verdict(), False)
     check("旧格式摘要恒不匹配（不误配门控）", old.matches_verdict("确认什么", "low", True), False)
     check("新格式摘要可读", store.latest("EVENT-NEW").matches_verdict("误报", "low", True), True)
+
+    # 坏行 / 非法 decision 必须**可见**：此前全是静默 `continue`，操作员的"驳回"
+    # 在界面上写进去了、链路里却被 `latest()` 当成不存在 → Reviewer 保持自动裁决，
+    # 全过程无任何报错。这是 HITL 闭环最难自查的一种失效。
+    check("跳过行数被记录（坏行 + 非对象 + 非法 decision）", store.skipped_lines, 3)
+    check("驳回结论仍可读回（未被坏行吞掉）", store.latest("EVENT-NEW").decision, "reject")
+    clean = tmp / "clean_fb.jsonl"
+    clean.write_text(
+        json.dumps({"event_id": "EVENT-OK", "decision": "confirm"}) + "\n",
+        encoding="utf-8",
+    )
+    clean_store = HumanFeedbackStore(path=clean)
+    clean_store.count()  # 必须先真正触发一次加载，否则 skipped_lines 恒为初始值 0
+    check("完好文件不误报跳过", clean_store.skipped_lines, 0)
 
 
 def readback_integration_tests(tmp: Path):

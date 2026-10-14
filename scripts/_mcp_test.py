@@ -3,10 +3,15 @@
 用法: python scripts/_mcp_test.py
 验证：
 1. tools/list 返回工具清单（≥10 个）
-2. tools/call 调用工具返回结构化结果（asset_lookup）
+2. tools/call **真的调通**工具（断言 isError=False 与结构化结果，不只看返回形状）
 3. 未知 method 返回 JSON-RPC error
 4. 未知工具返回 isError
 5. serve-mcp CLI 管道收发（echo 一条请求 → 读响应）
+6. 协议合规：通知不响应 / ping 可用 / inputSchema 声明与实现一致
+
+（2026-10-14 修订：第 2 节原为「空洞绿」——只断言 content 存在、text 非空，
+而失败返回的正是「工具执行失败: ...」，因此 10 个工具全部不可用时该节依然全绿。
+现改为断言真实成败，并补第 6 节协议合规与契约一致性。）
 """
 import json
 import os
@@ -55,17 +60,101 @@ def list_tools_tests():
 def call_tool_tests():
     print("== 2. tools/call ==")
     server = make_server()
+    # MCP 客户端只能给 JSON，因此 event 以 dict 传入 —— 服务端必须还原为
+    # SecurityEvent。此前不还原，工具读 event.host 直接 AttributeError，
+    # 10 个工具经 MCP 一个也调不动。
     resp = server.handle(
         {
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": {"name": "asset_lookup", "arguments": {}},
+            "params": {"name": "asset_lookup", "arguments": {"event": {"id": "EVENT-001"}}},
         }
     )
-    check("返回 result.content", "content" in resp.get("result", {}), True)
-    text = resp["result"]["content"][0]["text"]
+    result = resp.get("result", {})
+    check("返回 result.content", "content" in result, True)
+    text = result["content"][0]["text"]
     check("调用结果可序列化", isinstance(text, str) and len(text) > 0, True)
+
+    # ── 关键断言：必须断言「真的成功了」 ─────────────────────────
+    # 旧版只断言 content 存在 + text 非空字符串，而失败返回的正是
+    # "工具执行失败: ..." —— 于是 10 个工具全部报错时本测试照样全绿。
+    # 这是典型的「空洞绿」：断言了形状，没断言成败。
+    check("工具调用未失败 isError=False", result.get("isError"), False)
+    check("未出现失败文案", "工具执行失败" in text, False)
+    payload = json.loads(text)
+    check("结果为结构化对象", isinstance(payload, dict), True)
+    check("含 tool_name", payload.get("tool_name"), "asset_lookup")
+    check("summary 非空", bool(payload.get("summary")), True)
+
+    # 兼容两种传参：按声明 `{"kwargs": {...}}` 包裹 与 扁平直传，二者结果必须一致
+    wrapped = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": {
+                "name": "asset_lookup",
+                "arguments": {"kwargs": {"event": {"id": "EVENT-001"}}},
+            },
+        }
+    )
+    check("kwargs 包裹传参同样成功", wrapped["result"].get("isError"), False)
+    check("两种传参结果一致", wrapped["result"]["content"][0]["text"], text)
+
+    # 只传 event 即可调用的工具（其余需上游参数，属设计如此，另有测试覆盖）
+    for tool_name in ("log_lookup", "intel_lookup", "history_alert_lookup", "ioc_search"):
+        r = server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 22,
+                "method": "tools/call",
+                "params": {"name": tool_name, "arguments": {"event": {"id": "EVENT-001"}}},
+            }
+        )["result"]
+        check(f"{tool_name} 经 MCP 可调用", r.get("isError"), False)
+
+    # 依赖上游参数的工具：失败信息必须可操作（告诉调用方缺什么），
+    # 而不是抛一个 LLM 无法据以纠正的裸 AttributeError 文案。
+    dep = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 23,
+            "method": "tools/call",
+            "params": {"name": "incident_triage", "arguments": {"event": {"id": "EVENT-001"}}},
+        }
+    )["result"]
+    check("缺上游参数 → isError", dep.get("isError"), True)
+    check("缺参提示可操作（指明补 analysis/*_observation）", "依赖上游阶段参数" in dep["content"][0]["text"], True)
+
+
+def protocol_tests():
+    print("== 6. MCP 协议合规 ==")
+    server = make_server()
+    # 通知不得被响应：此前对 notifications/initialized 回了一条 id=null 的
+    # -32601 错误，标准客户端会收到一条不符合预期的消息。
+    check(
+        "通知不产生任何响应",
+        server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        None,
+    )
+    check(
+        "无 id 的自定义通知同样不响应",
+        server.handle({"jsonrpc": "2.0", "method": "exit"}),
+        None,
+    )
+    ping = server.handle({"jsonrpc": "2.0", "id": 9, "method": "ping"})
+    check("ping 有响应", ping is not None, True)
+    check("ping 返回空 result", ping.get("result"), {})
+
+    # 声明(inputSchema) 必须与实现(_call_tool 转发) 一致
+    tools = server.handle({"jsonrpc": "2.0", "id": 10, "method": "tools/list"})["result"]["tools"]
+    schema = tools[0]["inputSchema"]
+    check("声明含 event", "event" in schema["properties"], True)
+    check("声明不再用与实现不符的 kwargs 包裹", "kwargs" in schema["properties"], False)
+    check("required 为 [event]", schema.get("required"), ["event"])
+    check("声明键集与实现转发键集一致", set(schema["properties"]), set(server.TOOL_ARGUMENT_SCHEMA))
+    check("全部工具 schema 一致", all(t["inputSchema"] == schema for t in tools), True)
 
 
 def error_tests():
@@ -122,6 +211,7 @@ def main() -> int:
     error_tests()
     initialize_tests()
     cli_pipe_tests()
+    protocol_tests()
     print(f"\n=== {PASS} passed, {FAIL} failed ===")
     return 1 if FAIL else 0
 
