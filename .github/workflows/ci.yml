@@ -1,0 +1,112 @@
+name: ci
+
+# 上游（告警研判本体）的最小可信自动化：把「改后必验」从人工纪律变成默认通路。
+#
+# 单一事实源：测试 / 门禁清单**只在本文件出现一次**，不另维护一份脚本清单
+# （下游 SecAutoMind 的 `scripts/local_gate_check.py` 同样直接解析 ci.yml）。
+# 若新增测试脚本，改这里即可，无需同步第二处。
+#
+# 与下游 ci.yml 同构：job 名与步骤命名保持可对照，便于两侧一起看。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 1. 全量测试套件 + 运行时产物零污染守卫 ─────────────────────────────
+  # 双平台矩阵：仓库在 Windows 上开发（本地检出 CRLF），Linux 检出为 LF。
+  # 两侧都跑，才能拦住「探针原文硬编码 \n、遇上 CRLF 检出即静默失配」这类
+  # 只在单一平台暴露的问题（下游 secret_guard 就是这么踩的）。
+  #
+  # 零污染守卫的意义：测试不得改写**真实业务数据**
+  # （`security_agent/data/ledger/` + 两个 jsonl，均 .gitignore 但属生产数据）。
+  # 干净检出下基线为空，因此「跑完仍有零新增 / 零改写」是硬断言，不是观察。
+  unit-suites:
+    name: unit-suites (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # 核心运行零第三方依赖（仅标准库），故意不做 pip install：
+      # 保持 CI 贴近「受限环境也能跑通」这一对外承诺本身。
+      - name: 基线快照（干净检出下运行时产物应为 0 个）
+        run: python scripts/_runtime_snapshot.py --out "${{ runner.temp }}/runtime-baseline.json"
+
+      - name: 全量测试套件
+        shell: bash
+        run: |
+          set -euo pipefail
+          # _verify 是端到端快速验证（经 CLI 子进程，自带 env + 快照两道隔离）；
+          # _holdout_eval 是泛化回归门禁：CI 无 LLM 凭证时走规则回退，
+          # `llm_usage.requests=0` 会如实打印 —— 本 job 锁的是**规则路径**的泛化
+          # 不回落，不代表 LLM 路径已被验证（那需要凭证，属外部动作）。
+          for s in _verify_syntax _prefilter_test _knowledge_test _memory_test _ledger_test \
+                   _agents_test _eval_test _mcp_test _hittl_test _web_test _verify _holdout_eval; do
+            echo "::group::$s"
+            python "scripts/$s.py"
+            echo "::endgroup::"
+          done
+
+      - name: 运行时产物零污染守卫（漂移即判红）
+        run: python scripts/_runtime_snapshot.py --check "${{ runner.temp }}/runtime-baseline.json"
+
+  # ── 2. MCP 工具出口契约门禁 ───────────────────────────────────────────
+  # 先跑变异自证（证明门禁能红、非空洞绿），再跑真实门禁。
+  # 第 11 个工具 `command_executor` 默认不暴露（SECURITY_AGENT_ENABLE_COMMAND_TOOL），
+  # 故此 job 显式打开它以覆盖其契约——否则那部分契约无人守。
+  mcp-contract-gate:
+    name: mcp-contract-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 门禁自证（5 类变异必须都能让它红）
+        run: python scripts/_mcp_matrix_gate.py --mutate
+
+      - name: 出口矩阵门禁（默认暴露的 10 个工具）
+        run: python scripts/_mcp_matrix_gate.py
+
+      - name: 出口矩阵门禁（含第 11 个工具 command_executor）
+        env:
+          SECURITY_AGENT_ENABLE_COMMAND_TOOL: "1"
+        run: python scripts/_mcp_matrix_gate.py
+
+  # ── 3. 隔离设施自证 ───────────────────────────────────────────────────
+  # 两道：① 守卫的比对逻辑本身非空洞（含「受保护路径被移除」这类守卫自残）；
+  #       ② 隔离设施在真实写入面上成立（基线**必须**出现漂移，关写后零变化）。
+  isolation-self-proof:
+    name: isolation-self-proof
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 守卫自证（比对逻辑非空洞，不接触真实数据）
+        run: python scripts/_runtime_snapshot.py --self-test
+
+      - name: 隔离自证（基线必漂移 → 关写零变化 → 自动还原）
+        run: python scripts/_runtime_isolation.py

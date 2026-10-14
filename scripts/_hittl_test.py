@@ -6,7 +6,7 @@
 2. LLM 输出置信度归一化（_parse_llm_result：非法值回退 medium，合法值保留）
 3. 工单门控：低置信 → 待复核记录（REVIEW-），高置信 → P 级工单（TICKET-）
 4. 端到端（Mock）：EVENT-002 预筛 AUTO_CLOSE → confidence high → auto_reviewed
-5. 复核回写文件 review_feedback.jsonl 存在且 JSON 可解析
+5. 复核回写接线：默认反馈库指向生产路径；生产文件存在时内容须可解析
 6. HumanFeedbackStore：写入校验 / latest / 摘要匹配 / 旧格式与脏数据容错
 7. 读回闭环（集成）：确认 → human_confirmed；驳回相同结论 → human_rejected
    + 强制挂起 + 被驳回裁决不写入误报记忆
@@ -130,14 +130,31 @@ def e2e_tests():
 
 def feedback_file_tests():
     print("== 5. 复核回写文件 ==")
+    from security_agent.app import build_app
+
     path = os.path.join(PROJECT_DIR, "security_agent", "data", "review_feedback.jsonl")
-    check("review_feedback.jsonl 存在", os.path.exists(path), True)
+
+    # ① 接线不变量（与环境无关）：默认反馈库必须落在生产路径上。
+    #    这条取代了原先的「review_feedback.jsonl 存在」——后者的真实意图是验证
+    #    接线，却把「本机运营过 Web 复核」当成了前置条件：干净检出（CI / 新克隆）
+    #    下该文件本就不存在（属 .gitignore 的运行时产物），断言必然 FAIL。
+    app = build_app()
+    check(
+        "默认反馈库指向生产路径",
+        os.path.normcase(os.path.abspath(str(app.feedback.path))),
+        os.path.normcase(os.path.abspath(path)),
+    )
+
+    # ② 内容不变量（仅在文件存在时成立）：可解析、非空、字段齐全。
+    #    写 → 读回闭环由第 7 组集成测试在临时库内全链路驱动，故此处不再要求
+    #    「生产文件已存在」——那是运营状态，不是代码契约。
     if os.path.exists(path):
-        import json
         with open(path, encoding="utf-8") as fh:
             records = [json.loads(line) for line in fh if line.strip()]
         check("文件可解析且非空", len(records) > 0, True)
         check("记录含 event_id/decision", {"event_id", "decision"} <= set(records[0]), True)
+    else:
+        print("  [N/A] 生产 review_feedback.jsonl 不存在（干净检出下的预期状态；本组第 7 项已覆盖读写闭环）")
 
 
 VERDICT = dict(event_type="恶意脚本执行", risk_level="critical", is_false_positive=False)
