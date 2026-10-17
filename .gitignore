@@ -28,3 +28,6 @@ _p2_eval.json
 .vscode/
 .DS_Store
 Thumbs.db
+
+# WorkBuddy 本地产物
+.workbuddy/
