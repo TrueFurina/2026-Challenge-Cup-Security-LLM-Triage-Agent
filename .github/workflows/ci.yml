@@ -17,6 +17,19 @@ on:
 permissions:
   contents: read
 
+# Windows runner 的控制台代码页是 cp1252，脚本里的中文 print 直接抛
+# UnicodeEncodeError（2026-10-14 实测：scripts/_runtime_snapshot.py:134
+# `[基线] 受保护路径 …` 一行把 unit-suites (windows-latest) 判红，
+# 而同一 commit 的 ubuntu 腿全绿）。
+#
+# PYTHONUTF8=1 让 Python 进入 UTF-8 模式，stdout 编码固定为 utf-8，双平台一致。
+# ⚠️ 不要改用 PYTHONIOENCODING：它的优先级高于 UTF8 模式，实测「两者都设」时
+#    stdout 仍是 cp1252 —— 设了等于没设。
+# 选环境级开关而非在脚本里逐个 `sys.stdout.reconfigure(...)`：本仓库多处中文输出，
+# 逐个加必然漏，且在受限环境下跑的路径不止一个入口。
+env:
+  PYTHONUTF8: "1"
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
