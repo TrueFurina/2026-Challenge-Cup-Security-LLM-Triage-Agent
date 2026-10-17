@@ -40,6 +40,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _runtime_isolation import PROJECT_DIR, RUNTIME_PATHS, snapshot  # noqa: E402
 
+sys.path.insert(0, str(PROJECT_DIR))  # 仓库根：为了 import security_agent（本脚本自己要用）
+
+from security_agent.console import use_utf8_stdio  # noqa: E402
+
+use_utf8_stdio()  # 控制台编码无关性：英文 Windows 管道 stdout 是 cp1252，直写中文必崩
+
 
 def _encode() -> dict:
     """把当前运行时产物编码成 JSON 可序列化形态（路径统一 `\\` → `/`，跨平台可比）。"""

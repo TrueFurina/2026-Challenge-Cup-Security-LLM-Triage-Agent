@@ -32,6 +32,9 @@ from time import perf_counter
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from security_agent.console import use_utf8_stdio  # noqa: E402
+use_utf8_stdio()  # 控制台编码无关性：英文 Windows 管道 stdout 是 cp1252，直写中文必崩
+
 logging.getLogger("security_agent").setLevel(logging.ERROR)
 
 MODE = os.environ.get("HOLDOUT_MODE", "llm").strip().lower()

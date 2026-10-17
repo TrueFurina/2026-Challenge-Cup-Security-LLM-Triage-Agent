@@ -210,6 +210,9 @@ if __name__ == "__main__":
     import sys
 
     sys.path.insert(0, str(PROJECT_DIR))
+
+    from security_agent.console import use_utf8_stdio  # noqa: PLC0415
+    use_utf8_stdio()  # 控制台编码无关性：英文 Windows 管道 stdout 是 cp1252，直写中文必崩
     os.chdir(PROJECT_DIR)
     import security_agent.ai.triage as triage_mod  # noqa: PLC0415
     from security_agent.app import build_app  # noqa: PLC0415

@@ -24,13 +24,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _runtime_isolation import format_report, isolated_runtime  # noqa: E402
 
+from security_agent.console import use_utf8_stdio  # noqa: E402
+
+use_utf8_stdio()  # 控制台编码无关性：英文 Windows 管道 stdout 是 cp1252，直写中文必崩
+
 # 子进程继承：从源头关掉运行时写入
 os.environ["SECURITY_AGENT_RUNTIME_WRITES"] = "0"
 
 
 def _run(args, timeout=None):
     return subprocess.run(
-        args, capture_output=True, text=True, cwd=PROJECT_DIR, timeout=timeout
+        # 子进程管道输出被 security_agent.console 固定成 UTF-8 ⇒ 父进程按键 UTF-8 解。
+        args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        cwd=PROJECT_DIR, timeout=timeout
     )
 
 

@@ -381,7 +381,11 @@ class CommandExecutionTool(Tool):
         completed = subprocess.run(
             command,
             capture_output=True,
-            text=True,
+            # 显式 UTF-8 + replace：子进程输出按本机代码页解会在英文 Windows 上
+            # 解错（cp1252）甚至抛 UnicodeDecodeError；工具输出还要回灌给 LLM，
+            # 不能在这里崩，也不能静默解错。
+            encoding="utf-8",
+            errors="replace",
             shell=True,
             check=False,
         )

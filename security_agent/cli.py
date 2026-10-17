@@ -6,6 +6,7 @@ from pathlib import Path
 
 from security_agent.app import build_app
 from security_agent.config import AppConfig
+from security_agent.console import use_utf8_stdio
 from security_agent.reporting.render import render_evaluation_report
 from security_agent.web.server import run_server
 
@@ -169,6 +170,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    # 控制台编码无关性：事件标题、Agent 链路、报告都是中文，而英文 Windows
+    # （ANSI 代码页 cp1252）的管道 stdout 直写中文必抛 UnicodeEncodeError。
+    # 放在这里而不是各 cmd_* 里：入口只有一处，不必让每个子命令各自记得调。
+    use_utf8_stdio()
     parser = build_parser()
     args = parser.parse_args()
     return args.handler(args)

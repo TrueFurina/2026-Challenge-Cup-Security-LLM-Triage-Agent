@@ -6,6 +6,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from security_agent.console import use_utf8_stdio  # noqa: E402
+use_utf8_stdio()  # 控制台编码无关性：英文 Windows 管道 stdout 是 cp1252，直写中文必崩
 logging.getLogger("security_agent").setLevel(logging.ERROR)
 
 import security_agent.ai.client as C  # noqa: E402

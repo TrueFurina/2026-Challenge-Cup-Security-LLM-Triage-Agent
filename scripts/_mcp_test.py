@@ -20,6 +20,9 @@ import sys
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
+
+from security_agent.console import use_utf8_stdio  # noqa: E402
+use_utf8_stdio()  # 控制台编码无关性：英文 Windows 管道 stdout 是 cp1252，直写中文必崩
 os.chdir(PROJECT_DIR)
 
 from security_agent.mcp import McpServer  # noqa: E402
@@ -248,6 +251,9 @@ def cli_pipe_tests():
             input=request + "\n",
             capture_output=True,
             text=True,
+            # 同 _agents_test：MCP server 经管道暴露 ⇒ 输出被固定成 UTF-8。
+            # 用本机代码页解会在英文 Windows 上把响应里的中文解坏。
+            encoding="utf-8", errors="replace",
             timeout=60,
             cwd=PROJECT_DIR,
         )

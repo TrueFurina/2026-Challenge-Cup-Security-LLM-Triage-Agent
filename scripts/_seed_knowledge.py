@@ -1,5 +1,11 @@
 """扩充知识库到 50+ 条"""
 import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from security_agent.console import use_utf8_stdio  # noqa: E402
+use_utf8_stdio()  # 控制台编码无关性：英文 Windows 管道 stdout 是 cp1252，直写中文必崩
 
 data = json.loads(open('security_agent/data/knowledge.json', encoding='utf-8').read())
 existing = {d['title'] for d in data}

@@ -12,6 +12,9 @@ import sys
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
+
+from security_agent.console import use_utf8_stdio  # noqa: E402
+use_utf8_stdio()  # 控制台编码无关性：英文 Windows 管道 stdout 是 cp1252，直写中文必崩
 os.chdir(PROJECT_DIR)
 
 from security_agent.agents.base import AgentInput, BaseAgent  # noqa: E402
@@ -146,6 +149,10 @@ def cli_tests():
     r = subprocess.run(
         [sys.executable, "-m", "security_agent.cli", "coordinate", "--event-id", "EVENT-001"],
         capture_output=True, text=True, timeout=60, cwd=PROJECT_DIR,
+        # 子进程 stdout 是管道 ⇒ security_agent.console 会把它固定成 UTF-8。
+        # 这里必须按键 UTF-8 解，否则在英文 Windows（cp1252）上会把中文解成乱码，
+        # 下面几条「输出含中文」的断言全部假红。
+        encoding="utf-8", errors="replace",
     )
     check("CLI 退出码 0", r.returncode, 0)
     check("CLI 显示四角色链路", "多 Agent 协作链路" in r.stdout, True)

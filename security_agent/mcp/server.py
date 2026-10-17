@@ -40,6 +40,8 @@ import sys
 import traceback
 from typing import Any, Optional
 
+from security_agent.console import use_utf8_stdio
+
 PROTOCOL_VERSION = "2024-11-05"
 
 # 需要由 dict 还原为 ToolObservation 的参数名。
@@ -81,7 +83,16 @@ class McpServer:
 
     # ── 对外入口 ──────────────────────────────────────────
     def serve_stdio(self) -> None:
-        """从 stdin 逐行读 JSON-RPC 请求，处理后写回 stdout（flush 保证即时）。"""
+        """从 stdin 逐行读 JSON-RPC 请求，处理后写回 stdout（flush 保证即时）。
+
+        传输层不变量：**本通道两端一律 UTF-8**。响应用 `ensure_ascii=False`
+        直写中文，而英文 Windows（ANSI 代码页 cp1252）的管道 stdout 编码是
+        cp1252 ⇒ 一写中文就 `UnicodeEncodeError` 整个进程退出；读入侧同理，
+        按 cp1252 解 UTF-8 请求会**静默解错**（不报错、只是内容不对）。
+        放在这里而不是只放在 `cli.py`：下游平台有自己的 stdio 启动入口，
+        不一定经本项目的 CLI —— 传输边界才是这条不变量该待的地方。
+        """
+        use_utf8_stdio()
         for line in sys.stdin:
             line = line.strip()
             if not line:
