@@ -107,5 +107,3 @@ scripts/           # test & verification scripts
 ## 🤝 License
 
 [MIT](LICENSE) © Minjiang University Team
-
----
